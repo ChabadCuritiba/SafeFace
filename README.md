@@ -217,7 +217,7 @@ SafeFace/
 
 ### Prerequisites
 
-- **Python 3.11 or 3.12** recommended (3.10 and 3.13 also work). On Windows, `run.bat` offers to install it for you via `winget`.
+- **Python 3.12** recommended (3.10–3.14 work; **3.15 and newer are not supported yet**). On Windows, `run.bat` offers to install it for you via `winget`.
 - No compiler or Visual Studio Build Tools needed. Every package installs from ready-made wheels.
 - A webcam for testing, or your IP cameras.
 

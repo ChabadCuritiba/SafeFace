@@ -9,21 +9,29 @@ echo    SafeFace - starting up
 echo  ==============================
 echo.
 
-rem ---- 1. Find Python (3.11 preferred) --------------------------------------
+rem ---- 1. Find a SUPPORTED Python -------------------------------------------
+rem The AI engine (onnxruntime) has Windows builds for Python 3.10-3.14, 64-bit.
+rem Newer Pythons (3.15+) are skipped: they can stay installed side by side.
+set "PYCHECK=import sys,struct; sys.exit(0 if (3,10)<=sys.version_info[:2]<=(3,14) and struct.calcsize('P')==8 else 1)"
 set "PY="
-py -3.11 -c "import sys" >nul 2>&1 && set "PY=py -3.11"
-if not defined PY py -3.12 -c "import sys" >nul 2>&1 && set "PY=py -3.12"
-if not defined PY py -3.10 -c "import sys" >nul 2>&1 && set "PY=py -3.10"
-if not defined PY py -3 -c "import sys" >nul 2>&1 && set "PY=py -3"
-if not defined PY python -c "import sys" >nul 2>&1 && set "PY=python"
-if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" set "PY="%LOCALAPPDATA%\Programs\Python\Python311\python.exe""
+for %%V in (3.12 3.11 3.13 3.14 3.10) do if not defined PY (set "CAND=py -%%V" & call :trycand)
+if not defined PY (set "CAND=python" & call :trycand)
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (set "CAND="%LOCALAPPDATA%\Programs\Python\Python312\python.exe"" & call :trycand)
 if not defined PY goto :installpython
+
 :havepython
 for /f "delims=" %%v in ('call %PY% -c "import sys; print(sys.version.split()[0])"') do set "PYVER=%%v"
 echo  Using Python %PYVER%
 
 rem ---- 2. First run: create the environment and install packages -----------
 if exist ".venv\installed.ok" goto :run
+rem A setup left over from an unsupported Python (e.g. 3.15) can never work: rebuild it.
+if exist ".venv\Scripts\python.exe" (
+  ".venv\Scripts\python.exe" -c "%PYCHECK%" >nul 2>&1 || (
+    echo  Removing an old setup made with an unsupported Python version...
+    rmdir /s /q ".venv"
+  )
+)
 echo.
 echo  First run: installing SafeFace. This takes 5-10 minutes...
 echo.
@@ -48,16 +56,22 @@ echo  SafeFace has stopped. If you see an error above, copy the last lines and a
 pause
 exit /b 0
 
+rem ---- helpers ---------------------------------------------------------------
+:trycand
+%CAND% -c "%PYCHECK%" >nul 2>&1 && set "PY=%CAND%"
+exit /b 0
+
 :installpython
-echo  Python is not installed on this PC.
+echo  No supported Python found. SafeFace needs Python 3.10 to 3.14, 64-bit.
+for /f "delims=" %%v in ('python --version 2^>nul') do echo  This PC has %%v, which is too new for the AI engine. It can stay installed.
 where winget >nul 2>&1
 if errorlevel 1 goto :nopython
 echo.
-choice /c YN /m "  Install Python 3.11 automatically now (about 30 MB)"
+choice /c YN /m "  Install Python 3.12 next to it automatically now (about 30 MB)"
 if errorlevel 2 goto :nopython
-winget install -e --id Python.Python.3.11 --scope user --accept-package-agreements --accept-source-agreements
-if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" (
-  set "PY="%LOCALAPPDATA%\Programs\Python\Python311\python.exe""
+winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements
+if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
+  set "PY="%LOCALAPPDATA%\Programs\Python\Python312\python.exe""
   goto :havepython
 )
 echo.
@@ -67,18 +81,21 @@ pause
 exit /b 1
 
 :nopython
-echo  [ERROR] Python is not installed, or it is not on PATH.
+echo.
+echo  [ERROR] No supported Python found.
 echo.
 echo  How to fix:
-echo    1. Download Python 3.11 "Windows installer 64-bit" from
-echo       https://www.python.org/downloads/release/python-3119/
+echo    1. Download Python 3.12 "Windows installer (64-bit)" from
+echo       https://www.python.org/downloads/release/python-31210/
+echo       Not the newest version: SafeFace supports Python 3.10 to 3.14.
+echo       It can be installed next to a newer Python.
 echo    2. On the FIRST installer screen, tick  "Add python.exe to PATH",
 echo       then click "Install Now".
 echo    3. Close this window and double-click run.bat again.
 echo.
-echo  If Python is already installed and typing "python" opens the Microsoft Store:
+echo  If typing "python" opens the Microsoft Store:
 echo    Settings - Apps - Advanced app settings - App execution aliases,
-echo    turn OFF "python.exe" and "python3.exe", then reinstall Python as above.
+echo    turn OFF "python.exe" and "python3.exe", then install Python as above.
 echo.
 pause
 exit /b 1
@@ -97,7 +114,7 @@ echo  [ERROR] Installing the Python packages failed. See the messages above.
 echo.
 echo  Most common causes:
 echo    - No internet connection, or a firewall blocking pypi.org. Check and run again.
-echo    - Very new or very old Python. Python 3.11 or 3.12 is recommended.
+echo    - Unsupported Python. SafeFace needs Python 3.10 to 3.14, 64-bit.
 echo  Double-click run.bat again: it continues where it stopped.
 echo.
 pause
