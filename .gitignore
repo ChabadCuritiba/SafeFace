@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Runtime data (face database, snapshots) - contains biometric data, never commit
+backend/data/
+backend/.env
+
+# Firebase
+.firebase/
+.firebaserc
+firebase-debug.log*

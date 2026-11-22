@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SafeFace</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">🛡️</span> SafeFace</div>
+    <div class="top-right">
+      <span id="statusPill" class="pill pill-off">Connecting…</span>
+      <button id="settingsBtn" class="icon-btn" title="Settings">⚙</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- Live feed -->
+    <section class="card feed-card">
+      <div class="card-head">
+        <h2>Live camera</h2>
+        <span id="camStats" class="muted small"></span>
+      </div>
+      <div class="feed-wrap">
+        <img id="feed" alt="Live camera feed" />
+        <div id="feedError" class="feed-error hidden">Cannot reach backend</div>
+      </div>
+      <form id="cameraForm" class="row">
+        <input id="cameraSource" placeholder="Camera source: 0 for webcam, or rtsp://user:pass@ip:554/stream" />
+        <button type="submit" class="btn">Switch</button>
+      </form>
+    </section>
+
+    <!-- Live alerts -->
+    <section class="card alerts-card">
+      <div class="card-head">
+        <h2>Live alerts</h2>
+        <label class="small muted"><input type="checkbox" id="soundToggle" checked /> sound</label>
+      </div>
+      <ul id="alerts" class="alerts"><li class="empty muted">No detections yet.</li></ul>
+    </section>
+
+    <!-- Tabs: History / People -->
+    <section class="card wide">
+      <nav class="tabs">
+        <button class="tab active" data-tab="history">Detection history</button>
+        <button class="tab" data-tab="people">People database</button>
+      </nav>
+
+      <div id="tab-history" class="tab-panel">
+        <div class="row">
+          <input id="historyFilter" placeholder="Filter by name…" />
+          <button id="refreshHistory" class="btn btn-ghost">Refresh</button>
+          <button id="clearHistory" class="btn btn-danger">Clear all</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Snapshot</th><th>Name</th><th>Confidence</th><th>Time</th><th>Camera</th></tr></thead>
+            <tbody id="historyBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="tab-people" class="tab-panel hidden">
+        <div class="enroll-grid">
+          <form id="enrollForm" class="enroll">
+            <h3>Add a person</h3>
+            <input id="enrollName" name="name" placeholder="Full name" required maxlength="64" />
+            <label class="drop" id="dropZone">
+              <input id="enrollFiles" name="files" type="file" accept="image/*" multiple />
+              <span id="dropText">Drop reference photos here or click to browse<br /><small class="muted">3–5 clear photos from different angles work best</small></span>
+            </label>
+            <div class="row">
+              <button type="submit" class="btn">Upload &amp; enrol</button>
+              <button type="button" id="captureBtn" class="btn btn-ghost" title="Use the current camera frame">📸 Capture from camera</button>
+            </div>
+            <div id="enrollMsg" class="small"></div>
+          </form>
+          <div>
+            <h3>Enrolled people <span id="peopleCount" class="muted"></span></h3>
+            <ul id="peopleList" class="people"></ul>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Settings dialog -->
+  <dialog id="settingsDialog">
+    <form method="dialog" id="settingsForm">
+      <h3>Backend connection</h3>
+      <label>Backend URL <small class="muted">(empty = same server as this page)</small>
+        <input id="apiBaseInput" placeholder="https://your-backend.example.com" />
+      </label>
+      <label>API key <small class="muted">(the API_KEY set on the backend)</small>
+        <input id="apiKeyInput" type="password" autocomplete="off" />
+      </label>
+      <div class="row end">
+        <button value="cancel" class="btn btn-ghost">Cancel</button>
+        <button value="save" id="saveSettings" class="btn">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toasts" class="toasts"></div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
