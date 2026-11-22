@@ -67,16 +67,42 @@
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Snapshot</th><th>Name</th><th>Confidence</th><th>Time</th><th>Camera</th></tr></thead>
+            <thead><tr><th>Snapshot</th><th>Name</th><th>Confidence</th><th>Time</th><th>Camera</th><th></th></tr></thead>
             <tbody id="historyBody"></tbody>
           </table>
         </div>
       </div>
 
       <div id="tab-people" class="tab-panel hidden">
+        <!-- Add faces from any photo (works with group photos) -->
+        <section class="photo-enroll">
+          <div class="pe-head">
+            <h3>Add faces from a photo</h3>
+            <span class="small muted">Upload any photo, even a group photo. Every face is found automatically; name the ones you want to add.</span>
+          </div>
+          <label class="drop" id="photoDrop">
+            <input id="photoFile" type="file" accept="image/*" />
+            <span id="photoDropText">📷 Choose a photo or drop it here<br /><small class="muted">On a phone you can take a picture directly</small></span>
+          </label>
+          <div id="photoResult" class="hidden">
+            <div class="pe-body">
+              <div class="pe-stage"><img id="photoPreview" alt="Uploaded photo" /><div id="photoBoxes"></div></div>
+              <div>
+                <div id="photoSummary" class="small muted"></div>
+                <ul id="photoFaces" class="pe-faces"></ul>
+              </div>
+            </div>
+            <div class="row">
+              <button type="button" id="photoSave" class="btn">Add selected faces</button>
+              <button type="button" id="photoReset" class="btn btn-ghost">Use another photo</button>
+            </div>
+          </div>
+          <div id="photoMsg" class="small"></div>
+        </section>
+
         <div class="enroll-grid">
           <form id="enrollForm" class="enroll">
-            <h3>Add a person</h3>
+            <h3>Add one person from several photos</h3>
             <input id="enrollName" name="name" placeholder="Full name" required maxlength="64" />
             <label class="drop" id="dropZone">
               <input id="enrollFiles" name="files" type="file" accept="image/*" multiple />
@@ -96,6 +122,25 @@
       </div>
     </section>
   </main>
+
+  <!-- Name a face from a detection snapshot -->
+  <dialog id="nameDialog">
+    <form method="dialog" id="nameForm">
+      <h3>Add this face to the database</h3>
+      <div class="name-dlg-body">
+        <img id="nameDialogImg" alt="" />
+        <label>Name <small class="muted">(pick an existing person to add another photo of them)</small>
+          <input id="nameDialogInput" list="peopleNames" maxlength="64" autocomplete="off" />
+        </label>
+      </div>
+      <div id="nameDialogMsg" class="small"></div>
+      <div class="row end">
+        <button value="cancel" formnovalidate class="btn btn-ghost">Cancel</button>
+        <button value="save" id="nameDialogSave" class="btn">Add face</button>
+      </div>
+    </form>
+  </dialog>
+  <datalist id="peopleNames"></datalist>
 
   <!-- Settings dialog -->
   <dialog id="settingsDialog">

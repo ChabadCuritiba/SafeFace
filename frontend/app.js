@@ -122,7 +122,8 @@
       el("img", { src: mediaUrl(ev.snapshot_url), alt: ev.name, loading: "lazy" }),
       el("div", {},
         el("div", { className: "name", textContent: ev.name }),
-        el("div", { className: "small muted", textContent: `${pct(ev.confidence)} · ${fmtAgo(ev.timestamp)}` })));
+        el("div", { className: "small muted", textContent: `${pct(ev.confidence)} · ${fmtAgo(ev.timestamp)}` })),
+      addFaceButton(ev, "+ Add"));
     li.dataset.ts = ev.timestamp;
     li.dataset.conf = ev.confidence;
     return li;
@@ -180,7 +181,8 @@
       el("td", { textContent: ev.name }),
       el("td", { className: "conf", textContent: pct(ev.confidence) }),
       el("td", { textContent: fmtTime(ev.timestamp) }),
-      el("td", { className: "muted", textContent: ev.camera || "" }));
+      el("td", { className: "muted", textContent: ev.camera || "" }),
+      el("td", {}, addFaceButton(ev, "+ Add face")));
   }
   function prependHistoryRow(ev) {
     const f = $("#historyFilter").value.trim().toLowerCase();
@@ -195,7 +197,7 @@
       const events = await api(`/api/events?${q}`);
       const body = $("#historyBody");
       body.replaceChildren(...events.map(historyRow));
-      if (!events.length) body.append(el("tr", {}, el("td", { colSpan: 5, className: "muted", textContent: "No events." })));
+      if (!events.length) body.append(el("tr", {}, el("td", { colSpan: 6, className: "muted", textContent: "No events." })));
       return events;
     } catch (err) {
       if (err.status === 401) openSettings();
@@ -217,6 +219,7 @@
     try {
       const people = await api("/api/people");
       $("#peopleCount").textContent = `(${people.length})`;
+      $("#peopleNames").replaceChildren(...people.map((p) => el("option", { value: p.name })));
       $("#peopleList").replaceChildren(...people.map((p) => {
         const del = el("button", { title: `Remove ${p.name}`, textContent: "✕" });
         del.addEventListener("click", async () => {
@@ -279,6 +282,141 @@
       loadPeople();
     } catch (err) { enrollMessage(err.message, false); }
     finally { e.target.disabled = false; }
+  });
+
+  // ------------------------------------------------------------------ add faces from a photo
+  const photo = { uploadId: null, faces: [] };
+  const photoFile = $("#photoFile"), photoDrop = $("#photoDrop");
+
+  function photoMessage(text, ok) {
+    $("#photoMsg").replaceChildren(...(text ? [el("div", { className: ok ? "ok" : "err", textContent: text })] : []));
+  }
+  function resetPhoto() {
+    photo.uploadId = null; photo.faces = [];
+    photoFile.value = "";
+    $("#photoResult").classList.add("hidden");
+    photoDrop.classList.remove("hidden");
+    $("#photoBoxes").replaceChildren(); $("#photoFaces").replaceChildren();
+  }
+
+  async function analysePhoto(file) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return photoMessage("That file isn't an image.", false);
+    photoMessage("Finding faces…", true);
+    const fd = new FormData(); fd.append("file", file);
+    let r;
+    try { r = await api("/api/photos/detect", { method: "POST", body: fd }); }
+    catch (err) { photoFile.value = ""; return photoMessage(err.message, false); }
+    if (!r.faces.length) {
+      photoFile.value = "";
+      return photoMessage("No faces found in this photo. Try a clearer or closer photo where faces are at least ~40 px wide.", false);
+    }
+    photo.uploadId = r.upload_id; photo.faces = r.faces;
+    photoMessage("");
+    $("#photoPreview").src = r.preview;
+    $("#photoSummary").textContent = r.faces.length === 1
+      ? "Found 1 face. Type a name to add it."
+      : `Found ${r.faces.length} faces. Type a name next to each face you want to add.`;
+
+    const boxes = [], items = [];
+    const setSelected = (i, on) => { boxes[i].classList.toggle("selected", on); items[i].classList.toggle("selected", on); };
+    const setHover = (i, on) => boxes[i].classList.toggle("hover", on);
+
+    r.faces.forEach((f, i) => {
+      const [x, y, w, h] = f.box;
+      const box = el("div", { className: "pe-box" + (f.match ? " known" : ""), title: f.match ? f.match.name : `Face ${i + 1}` },
+        el("span", { textContent: f.match ? `${i + 1} · ${f.match.name}` : String(i + 1) }));
+      Object.assign(box.style, { left: `${x * 100}%`, top: `${y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%` });
+
+      const check = el("input", { type: "checkbox", title: "Add this face" });
+      const name = el("input", { placeholder: f.match ? f.match.name : "Name", value: "", maxLength: 64 });
+      name.setAttribute("list", "peopleNames");
+      const hints = [];
+      if (f.match) hints.push(el("div", { className: "small hint-known", textContent: `Already known as ${f.match.name} (${pct(f.match.confidence)}). Adding it again improves accuracy.` }));
+      if (f.small) hints.push(el("div", { className: "small hint-warn", textContent: "Small face, so recognition may be less reliable." }));
+      const li = el("li", { className: "pe-face" }, check, el("img", { src: f.thumb, alt: "" }),
+        el("div", { className: "pe-meta" }, el("span", { className: "badge", textContent: `Face ${i + 1}` }), name, ...hints));
+
+      name.addEventListener("input", () => { check.checked = name.value.trim() !== ""; setSelected(i, check.checked); });
+      check.addEventListener("change", () => {
+        if (check.checked && !name.value.trim() && f.match) name.value = f.match.name;  // tick a known face = add to that person
+        setSelected(i, check.checked);
+        if (check.checked && !name.value.trim()) name.focus();
+      });
+      box.addEventListener("click", () => { name.focus(); li.scrollIntoView({ block: "nearest" }); });
+      for (const n of [li, box]) {
+        n.addEventListener("mouseenter", () => setHover(i, true));
+        n.addEventListener("mouseleave", () => setHover(i, false));
+      }
+      boxes.push(box); items.push(li);
+      f._check = check; f._name = name;
+    });
+    $("#photoBoxes").replaceChildren(...boxes);
+    $("#photoFaces").replaceChildren(...items);
+    photoDrop.classList.add("hidden");
+    $("#photoResult").classList.remove("hidden");
+    if (r.faces.length === 1) { r.faces[0]._name.focus(); }
+  }
+
+  $("#photoSave").addEventListener("click", async (e) => {
+    const picked = photo.faces.filter((f) => f._check.checked);
+    if (!picked.length) return photoMessage("Type a name next to at least one face.", false);
+    const missing = picked.filter((f) => !f._name.value.trim());
+    if (missing.length) return photoMessage(`Face ${missing.map((f) => f.index + 1).join(", ")} is ticked but has no name.`, false);
+    e.target.disabled = true;
+    try {
+      const r = await api(`/api/photos/${photo.uploadId}/enroll`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ faces: picked.map((f) => ({ index: f.index, name: f._name.value.trim() })) }),
+      });
+      const names = [...new Set(r.results.map((x) => x.name))].join(", ");
+      resetPhoto();
+      photoMessage(`Added ${r.added} face${r.added === 1 ? "" : "s"}: ${names}.`, true);
+      loadPeople();
+    } catch (err) {
+      photoMessage(err.message, false);
+      if (err.status === 410) resetPhoto();
+    } finally { e.target.disabled = false; }
+  });
+  $("#photoReset").addEventListener("click", () => { resetPhoto(); photoMessage(""); photoFile.click(); });
+  photoFile.addEventListener("change", () => analysePhoto(photoFile.files[0]));
+  ["dragenter", "dragover"].forEach((t) => photoDrop.addEventListener(t, (e) => { e.preventDefault(); photoDrop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((t) => photoDrop.addEventListener(t, (e) => { e.preventDefault(); photoDrop.classList.remove("over"); }));
+  photoDrop.addEventListener("drop", (e) => analysePhoto(e.dataTransfer.files[0]));
+
+  // ------------------------------------------------------------------ add a face from a detection snapshot
+  const nameDlg = $("#nameDialog");
+  let nameDlgEvent = null;
+  function addFaceButton(ev, label) {
+    if (!ev.snapshot_url || ev.id == null) return null;
+    const b = el("button", { type: "button", className: "add-face-btn", textContent: label, title: "Add this face to the database" });
+    b.addEventListener("click", (e) => { e.stopPropagation(); openNameDialog(ev); });
+    return b;
+  }
+  function openNameDialog(ev) {
+    nameDlgEvent = ev;
+    $("#nameDialogImg").src = mediaUrl(ev.snapshot_url);
+    $("#nameDialogInput").value = ev.name !== "Unknown" ? ev.name : "";
+    $("#nameDialogMsg").replaceChildren();
+    nameDlg.showModal();
+    $("#nameDialogInput").focus();
+  }
+  $("#nameForm").addEventListener("submit", async (e) => {
+    if (e.submitter && e.submitter.value !== "save") return;  // Cancel just closes
+    e.preventDefault();
+    const name = $("#nameDialogInput").value.trim();
+    const msg = (t, ok) => $("#nameDialogMsg").replaceChildren(el("div", { className: ok ? "ok" : "err", textContent: t }));
+    if (!name) return msg("Type a name.", false);
+    const btn = $("#nameDialogSave"); btn.disabled = true;
+    try {
+      await api(`/api/events/${nameDlgEvent.id}/enroll`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
+      });
+      nameDlg.close();
+      toast(`Added face to ${name}`);
+      loadPeople();
+    } catch (err) { msg(err.message, false); }
+    finally { btn.disabled = false; }
   });
 
   // ------------------------------------------------------------------ tabs

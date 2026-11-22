@@ -144,6 +144,10 @@ class Database:
             "SELECT * FROM events ORDER BY timestamp DESC LIMIT ? OFFSET ?", (limit, offset)
         )
 
+    def get_event(self, event_id: int) -> dict[str, Any] | None:
+        rows = self._query("SELECT * FROM events WHERE id = ?", (event_id,))
+        return rows[0] if rows else None
+
     def clear_events(self) -> list[str]:
         paths = [r["snapshot_path"] for r in self._query("SELECT snapshot_path FROM events") if r["snapshot_path"]]
         self._exec("DELETE FROM events")

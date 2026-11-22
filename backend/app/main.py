@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hmac
 import json
 import logging
 import shutil
+import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -134,16 +137,61 @@ def person_to_json(p: dict) -> dict:
     return p
 
 
+def save_face(person_id: int, img: np.ndarray, embedding: np.ndarray, bbox: tuple[int, int, int, int]) -> None:
+    rel = Path("faces") / str(person_id) / f"{uuid.uuid4().hex[:12]}.jpg"
+    (settings.data_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(settings.data_dir / rel), crop_face(img, bbox), [cv2.IMWRITE_JPEG_QUALITY, 92])
+    state.db.add_embedding(person_id, embedding, rel.as_posix())
+
+
 def enroll_image(person_id: int, img: np.ndarray) -> tuple[bool, str]:
     result = state.engine.largest_face_embedding(img)
     if result is None:
         return False, "no face found"
     embedding, bbox = result
-    rel = Path("faces") / str(person_id) / f"{uuid.uuid4().hex[:12]}.jpg"
-    (settings.data_dir / rel).parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(settings.data_dir / rel), crop_face(img, bbox), [cv2.IMWRITE_JPEG_QUALITY, 92])
-    state.db.add_embedding(person_id, embedding, rel.as_posix())
+    save_face(person_id, img, embedding, bbox)
     return True, "ok"
+
+
+def jpeg_data_url(img: np.ndarray, max_side: int, quality: int = 85) -> str:
+    h, w = img.shape[:2]
+    scale = min(1.0, max_side / max(h, w))
+    if scale < 1:
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
+
+
+class PhotoCache:
+    """Holds analysed photos briefly so the user can pick and name faces
+    without re-uploading. In-memory: fine for a single backend process."""
+
+    TTL, MAX = 15 * 60, 20
+
+    def __init__(self) -> None:
+        self._items: dict[str, tuple[float, np.ndarray, list]] = {}
+        self._lock = threading.Lock()
+
+    def put(self, img: np.ndarray, faces: list) -> str:
+        key = uuid.uuid4().hex
+        with self._lock:
+            now = time.time()
+            for k in [k for k, v in self._items.items() if now - v[0] > self.TTL]:
+                del self._items[k]
+            while len(self._items) >= self.MAX:
+                del self._items[min(self._items, key=lambda k: self._items[k][0])]
+            self._items[key] = (now, img, faces)
+        return key
+
+    def get(self, key: str):
+        with self._lock:
+            item = self._items.get(key)
+        if not item or time.time() - item[0] > self.TTL:
+            return None
+        return item[1], item[2]
+
+
+photo_cache = PhotoCache()
 
 
 def remove_files(rel_paths: list[str]) -> None:
@@ -236,6 +284,62 @@ def capture_person(name: str = Form(...)):
     return {"person_id": person_id, "name": name, "added": 1}
 
 
+@app.post("/api/photos/detect")
+def detect_photo(file: UploadFile = File(...)):
+    """Step 1 of 'add faces from a photo': find every face and say who it already matches."""
+    img = decode_image(file.file.read())
+    if img is None:
+        raise HTTPException(400, "Not a valid image (JPG/PNG/WebP, max 15 MB). iPhone HEIC photos must be exported as JPG.")
+    faces = sorted(state.engine.detect(img, min_face_size=20), key=lambda f: f.bbox[0])  # left to right
+    h, w = img.shape[:2]
+    out = []
+    for i, f in enumerate(faces):
+        pid, name, conf = state.index.match(f.embedding, settings.match_threshold)
+        x1, y1, x2, y2 = f.bbox
+        out.append({
+            "index": i,
+            "box": [x1 / w, y1 / h, (x2 - x1) / w, (y2 - y1) / h],  # normalised x, y, width, height
+            "det_score": round(f.det_score, 3),
+            "match": {"person_id": pid, "name": name, "confidence": round(conf, 4)} if pid is not None else None,
+            "thumb": jpeg_data_url(crop_face(img, f.bbox), 160),
+            "small": min(x2 - x1, y2 - y1) < 60,
+        })
+    upload_id = photo_cache.put(img, faces)
+    return {"upload_id": upload_id, "width": w, "height": h, "preview": jpeg_data_url(img, 1200), "faces": out}
+
+
+class FaceAssignment(BaseModel):
+    index: int
+    name: str
+
+
+class PhotoEnrollBody(BaseModel):
+    faces: list[FaceAssignment]
+
+
+@app.post("/api/photos/{upload_id}/enroll")
+def enroll_photo_faces(upload_id: str, body: PhotoEnrollBody):
+    """Step 2: save the faces the user picked, each under the name they typed."""
+    cached = photo_cache.get(upload_id)
+    if cached is None:
+        raise HTTPException(410, "This photo has expired - please upload it again")
+    img, faces = cached
+    if not body.faces:
+        raise HTTPException(400, "Pick at least one face")
+    names = [clean_name(a.name) for a in body.faces]  # validate everything before saving anything
+    for a in body.faces:
+        if not 0 <= a.index < len(faces):
+            raise HTTPException(400, f"Unknown face #{a.index}")
+    results = []
+    for a, name in zip(body.faces, names):
+        f = faces[a.index]
+        person_id = state.db.get_or_create_person(name)
+        save_face(person_id, img, f.embedding, f.bbox)
+        results.append({"index": a.index, "name": name, "person_id": person_id})
+    state.index.load(state.db.all_embeddings())
+    return {"added": len(results), "results": results}
+
+
 @app.delete("/api/people/{person_id}")
 def delete_person(person_id: int):
     if not state.db.get_person(person_id):
@@ -250,6 +354,29 @@ def delete_person(person_id: int):
 @app.get("/api/events")
 def list_events(limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0), name: str | None = None):
     return [event_to_json(e) for e in state.db.list_events(limit, offset, name)]
+
+
+class NameBody(BaseModel):
+    name: str
+
+
+@app.post("/api/events/{event_id}/enroll")
+def enroll_from_event(event_id: int, body: NameBody):
+    """Add the face from a detection snapshot to the database (e.g. name an 'Unknown')."""
+    name = clean_name(body.name)
+    event = state.db.get_event(event_id)
+    if not event or not event.get("snapshot_path"):
+        raise HTTPException(404, "Event or snapshot not found")
+    img = cv2.imread(str(settings.data_dir / event["snapshot_path"]))
+    if img is None:
+        raise HTTPException(404, "Snapshot file is missing")
+    result = state.engine.largest_face_embedding(img)
+    if result is None:
+        raise HTTPException(422, "Couldn't find a clear face in this snapshot")
+    person_id = state.db.get_or_create_person(name)
+    save_face(person_id, img, *result)
+    state.index.load(state.db.all_embeddings())
+    return {"person_id": person_id, "name": name, "added": 1}
 
 
 @app.delete("/api/events")

@@ -118,9 +118,11 @@ On first start InsightFace downloads the `buffalo_l` model pack (about 280 MB) t
 
 1. **Start the server** with the default `CAMERA_SOURCE=0`, which is the first webcam. Your face should appear in the *Live camera* panel with a red **Unknown** box around it.
    - Is the feed black, or showing "NO SIGNAL"? Try `CAMERA_SOURCE=1`. On macOS, also allow camera access for your terminal under *System Settings → Privacy → Camera*.
-2. **Enrol yourself.** Open **People database**, type your name, then do either of these:
-   - click **📸 Capture from camera** 2–3 times while turning your head slightly, or
-   - drop in 3–5 photos of yourself (clear, front-facing, different lighting and angles) and click **Upload & enrol**.
+2. **Enrol yourself.** Open **People database** and use any of these:
+   - **Add faces from a photo:** choose any photo, even a group photo. Every face gets a numbered box; type a name next to the faces you want and click **Add selected faces**. Faces that are already enrolled show in green with their name.
+   - **Capture from camera:** type your name and click **📸 Capture from camera** 2–3 times while turning your head slightly.
+   - **Several photos of one person:** type a name, drop in 3–5 photos (clear, front-facing, different lighting and angles) and click **Upload & enrol**.
+   - **From a detection:** click **+ Add face** on any row in *Detection history* or *Live alerts* to name that snapshot, for example to identify an "Unknown". Set `LOG_UNKNOWN=true` so unknown faces get logged.
 3. **Walk out of frame and back in.** The box turns green with your name and a match percentage. A toast and a sound fire, and a new row with a snapshot appears in **Detection history** and **Live alerts**.
 4. **Check the motion gate.** Sit perfectly still. After about 3 s the status pill changes to **Live · idle** and recognition stops. Move and it switches back to **scanning**.
 5. **Test a second person.** Hold up a photo of someone else on your phone. Enrol them, then show the photo again.
@@ -300,6 +302,9 @@ Typical scores are 0.6–0.9 for the same person and below 0.3 for different peo
 | GET | `/api/people` | Enrolled people |
 | POST | `/api/people` | Form fields `name` and `files` (one or more images): enrol or add photos |
 | POST | `/api/people/capture` | Form field `name`: enrol from the current camera frame |
+| POST | `/api/photos/detect` | Form field `file`: find every face in a photo, with boxes, thumbnails and existing matches |
+| POST | `/api/photos/{upload_id}/enroll` | `{"faces":[{"index":0,"name":"Ana"}]}`: save the chosen faces from that photo |
+| POST | `/api/events/{id}/enroll` | `{"name":"Ana"}`: add the face from a detection snapshot |
 | DELETE | `/api/people/{id}` | Remove a person and their photos |
 | GET | `/api/events?limit=&offset=&name=` | Detection history |
 | DELETE | `/api/events` | Clear history and snapshots |
@@ -321,6 +326,7 @@ Auth: send the header `X-API-Key: <key>` or the query parameter `?key=<key>`. Th
 | Dashboard on Firebase shows "Disconnected" | Check that the backend URL is HTTPS and that `CORS_ORIGINS` includes your Firebase domain. Then check the API key in ⚙ Settings. |
 | "Bad API key" | Re-enter the key in ⚙ Settings. It must match `API_KEY` on the backend. |
 | "No face found" when enrolling | Use a clearer, larger, front-facing photo. Faces must be at least about 40 px wide. |
+| "Not a valid image" for iPhone photos | HEIC isn't supported. Export or share the photo as JPG (on iPhone: *Settings → Camera → Formats → Most Compatible*). |
 
 ---
 
