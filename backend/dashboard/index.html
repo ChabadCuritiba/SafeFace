@@ -27,20 +27,22 @@
   </header>
 
   <main class="layout">
-    <!-- Live feed -->
+    <!-- Cameras -->
     <section class="card feed-card">
       <div class="card-head">
-        <h2>Live camera</h2>
-        <span id="camStats" class="muted small"></span>
+        <h2 id="camTitle">Cameras</h2>
+        <div class="head-actions">
+          <span id="camStats" class="muted small"></span>
+          <button id="backToGrid" type="button" class="btn btn-ghost btn-sm hidden">← All cameras</button>
+          <button id="editFocused" type="button" class="btn btn-ghost btn-sm hidden">✎ Edit</button>
+          <button id="addCameraBtn" type="button" class="btn btn-sm">+ Add camera</button>
+        </div>
       </div>
-      <div class="feed-wrap">
-        <img id="feed" alt="Live camera feed" />
-        <div id="feedError" class="feed-error hidden"></div>
+      <div id="feedError" class="feed-msg hidden"></div>
+      <div id="camGrid" class="cam-grid"></div>
+      <div id="camFocus" class="feed-wrap hidden">
+        <img id="feed" alt="Live camera" />
       </div>
-      <form id="cameraForm" class="row">
-        <input id="cameraSource" placeholder="Camera source: 0 for webcam, or rtsp://user:pass@ip:554/stream" />
-        <button type="submit" class="btn">Switch</button>
-      </form>
     </section>
 
     <!-- Live alerts -->
@@ -110,7 +112,8 @@
             </label>
             <div class="row">
               <button type="submit" class="btn">Upload &amp; enrol</button>
-              <button type="button" id="captureBtn" class="btn btn-ghost" title="Use the current camera frame">📸 Capture from camera</button>
+              <button type="button" id="captureBtn" class="btn btn-ghost" title="Use the current camera frame">📸 Capture from</button>
+              <select id="captureCamera" title="Camera to capture from"></select>
             </div>
             <div id="enrollMsg" class="small"></div>
           </form>
@@ -141,6 +144,54 @@
     </form>
   </dialog>
   <datalist id="peopleNames"></datalist>
+
+  <!-- Add / edit camera -->
+  <dialog id="cameraDialog">
+    <form method="dialog" id="cameraForm">
+      <h3 id="camDlgTitle">Add camera</h3>
+      <label>Name <input id="camName" maxlength="40" placeholder="e.g. Front door" autocomplete="off" /></label>
+      <label>Type
+        <select id="camType">
+          <option value="hik">Hikvision camera or NVR channel</option>
+          <option value="url">Other IP camera (RTSP address)</option>
+          <option value="usb">USB webcam on this PC</option>
+        </select>
+      </label>
+      <div id="camHik" class="cam-fields">
+        <div class="grid2">
+          <label>IP address <input id="hikIp" placeholder="192.168.1.64" autocomplete="off" /></label>
+          <label>RTSP port <input id="hikPort" type="number" min="1" max="65535" value="554" /></label>
+        </div>
+        <div class="grid2">
+          <label>Username <input id="hikUser" autocomplete="off" placeholder="admin" /></label>
+          <label>Password <input id="hikPass" type="password" autocomplete="new-password" /></label>
+        </div>
+        <div class="grid2">
+          <label>Channel <input id="hikCh" type="number" min="1" max="256" value="1" />
+            <small class="muted">Camera on its own: 1. Through an NVR: the camera's number on the NVR.</small></label>
+          <label>Stream
+            <select id="hikStream"><option value="sub">Sub-stream (recommended)</option><option value="main">Main stream (heavier)</option></select>
+          </label>
+        </div>
+      </div>
+      <div id="camUrl" class="cam-fields hidden">
+        <label>RTSP address <input id="camSource" placeholder="rtsp://user:password@192.168.1.50:554/stream" autocomplete="off" /></label>
+      </div>
+      <div id="camUsb" class="cam-fields hidden">
+        <label>Webcam number <input id="camUsbIdx" type="number" min="0" max="20" value="0" />
+          <small class="muted">0 = first webcam, 1 = second…</small></label>
+      </div>
+      <label class="check"><input type="checkbox" id="camEnabled" checked /> Enabled</label>
+      <div id="camTestResult" class="cam-test"></div>
+      <div class="row end">
+        <button type="button" id="camDelete" class="btn btn-danger hidden">Delete</button>
+        <span class="spacer"></span>
+        <button type="button" id="camTest" class="btn btn-ghost">Test connection</button>
+        <button value="cancel" formnovalidate class="btn btn-ghost">Cancel</button>
+        <button value="save" id="camSave" class="btn">Save</button>
+      </div>
+    </form>
+  </dialog>
 
   <!-- Settings dialog -->
   <dialog id="settingsDialog">

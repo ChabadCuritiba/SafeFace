@@ -12,3 +12,8 @@ backend/.env
 .firebase/
 firebase-debug.log*
 *-debug.log
+
+# Firebase service-account key: full admin access to the project - never commit
+backend/firebase-key.json
+*firebase-adminsdk*.json
+*service-account*.json

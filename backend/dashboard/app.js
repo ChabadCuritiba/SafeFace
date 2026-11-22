@@ -76,64 +76,248 @@
     } catch { /* audio blocked until user interacts */ }
   }
 
-  // ------------------------------------------------------------------ live feed
+  // ------------------------------------------------------------------ cameras
+  // Grid of tiles (snapshots refreshed ~2x/s, which avoids the browser's 6-connection
+  // limit with many cameras) + a full-size MJPEG view when a tile is clicked.
   const feed = $("#feed");
+  let cameras = [];            // GET /api/cameras
+  let camStatus = {};          // id -> live status from the WebSocket
+  let focusId = null;
+  const withT = (u) => u + (u.includes("?") ? "&" : "?") + "t=" + Date.now();
+
   // Hosted on Firebase with no backend address set: the backend can't be on this server.
   const needsBackendUrl = () => !cfg.apiBase && /\.(web\.app|firebaseapp\.com)$/.test(location.hostname);
 
   function showFeedError() {
     const box = $("#feedError");
     const target = cfg.apiBase || location.origin;
-    const btn = el("button", { type: "button", className: "btn", textContent: "⚙ Open settings" });
+    const btn = el("button", { type: "button", className: "btn btn-sm", textContent: "⚙ Open settings" });
     btn.addEventListener("click", openSettings);
     const lines = needsBackendUrl()
       ? ["Not connected to your SafeFace backend yet.",
-         "This website is only the dashboard. Click ⚙ Settings and enter your backend's address (for example your Cloudflare Tunnel URL) and API key."]
+         "This page is only the dashboard. Click ⚙ Settings and enter your backend's address and API key."]
       : [`Cannot reach the SafeFace backend at ${target}`,
          target.includes("localhost") || target.includes("127.0.0.1")
            ? "Make sure run.bat is running and its window shows “SafeFace ready.”"
-           : "Make sure run.bat and your tunnel are both running on the PC, and that the address in ⚙ Settings is correct."];
+           : "Make sure run.bat (and your tunnel, if you use one) is running on the PC, and that the address in ⚙ Settings is correct."];
     box.replaceChildren(el("div", { className: "feed-error-inner" },
       el("strong", { textContent: lines[0] }), el("p", { textContent: lines[1] }), btn));
     box.classList.remove("hidden");
-    feed.style.visibility = "hidden";
   }
-  function startFeed() {
-    if (needsBackendUrl()) { feed.removeAttribute("src"); showFeedError(); return; }
-    feed.src = url("/api/stream", true) + (cfg.apiKey ? "&" : "?") + "t=" + Date.now();
+  const hideFeedError = () => $("#feedError").classList.add("hidden");
+
+  async function loadCameras() {
+    try {
+      cameras = await api("/api/cameras");
+      hideFeedError();
+    } catch (err) {
+      if (err.status === 401) { openSettings(); return; }
+      showFeedError();
+      setTimeout(loadCameras, 4000);
+      return;
+    }
+    if (focusId !== null && !cameras.some((c) => c.id === focusId && c.enabled)) closeFocus();
+    renderGrid();
+    fillCaptureSelect();
   }
-  feed.addEventListener("load", () => { $("#feedError").classList.add("hidden"); feed.style.visibility = ""; });
-  feed.addEventListener("error", () => {
-    if (!feed.getAttribute("src")) return;
-    showFeedError();
-    setTimeout(startFeed, 3000);
+
+  function pollTile(img, id) {
+    if (!img.isConnected) return;
+    if (focusId !== null || document.hidden) { setTimeout(() => pollTile(img, id), 1000); return; }
+    img.onload = () => setTimeout(() => pollTile(img, id), 450);
+    img.onerror = () => setTimeout(() => pollTile(img, id), 3000);
+    img.src = withT(url(`/api/cameras/${id}/snapshot.jpg`, true));
+  }
+
+  function renderGrid() {
+    const grid = $("#camGrid");
+    if (!cameras.length) {
+      const add = el("button", { type: "button", className: "btn", textContent: "+ Add your first camera" });
+      add.addEventListener("click", () => openCameraDialog());
+      grid.className = "cam-grid";
+      grid.replaceChildren(el("div", { className: "cam-empty" },
+        el("strong", { textContent: "No cameras yet" }),
+        el("span", { textContent: "Add a Hikvision camera, an NVR channel, any RTSP camera or a USB webcam." }), add));
+      return;
+    }
+    const n = cameras.length;
+    grid.className = `cam-grid ${n <= 6 ? "n" + n : "many"}`;
+    grid.replaceChildren(...cameras.map((c) => {
+      const st = camStatus[c.id];
+      const edit = el("button", { type: "button", className: "cam-edit", textContent: "✎", title: `Edit ${c.name}` });
+      edit.addEventListener("click", (e) => { e.stopPropagation(); openCameraDialog(c); });
+      const tile = el("div", { className: "cam-tile" + (c.enabled ? "" : " disabled"), title: c.source },
+        el("img", { alt: c.name }),
+        c.enabled ? null : el("div", { className: "cam-off", textContent: "Disabled" }),
+        el("div", { className: "cam-label" },
+          el("span", { className: "dot" + (st ? (st.connected ? " ok" : " off") : "") }),
+          el("span", { className: "nm", textContent: c.name }), edit));
+      tile.dataset.id = c.id;
+      if (c.enabled) tile.addEventListener("click", () => openFocus(c.id));
+      return tile;
+    }));
+    // start refreshing only once the tiles are on the page
+    for (const tile of grid.querySelectorAll(".cam-tile:not(.disabled)")) pollTile(tile.querySelector("img"), +tile.dataset.id);
+  }
+
+  function openFocus(id) {
+    const cam = cameras.find((c) => c.id === id);
+    if (!cam) return;
+    focusId = id;
+    $("#camTitle").textContent = cam.name;
+    $("#camGrid").classList.add("hidden");
+    $("#camFocus").classList.remove("hidden");
+    $("#backToGrid").classList.remove("hidden");
+    $("#editFocused").classList.remove("hidden");
+    feed.src = withT(url(`/api/cameras/${id}/stream`, true));
+  }
+  function closeFocus() {
+    focusId = null;
+    feed.removeAttribute("src");
+    $("#camTitle").textContent = "Cameras";
+    $("#camFocus").classList.add("hidden");
+    $("#camGrid").classList.remove("hidden");
+    $("#backToGrid").classList.add("hidden");
+    $("#editFocused").classList.add("hidden");
+  }
+  feed.addEventListener("error", () => { if (focusId !== null) setTimeout(() => focusId !== null && openFocus(focusId), 3000); });
+  $("#backToGrid").addEventListener("click", closeFocus);
+  $("#editFocused").addEventListener("click", () => openCameraDialog(cameras.find((c) => c.id === focusId)));
+  $("#addCameraBtn").addEventListener("click", () => openCameraDialog());
+
+  function fillCaptureSelect() {
+    const sel = $("#captureCamera");
+    const prev = sel.value;
+    sel.replaceChildren(...cameras.filter((c) => c.enabled).map((c) => el("option", { value: c.id, textContent: c.name })));
+    if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  }
+
+  // ---- add / edit camera dialog -------------------------------------------
+  const camDlg = $("#cameraDialog");
+  let editing = null;
+  function showCamType() {
+    const t = $("#camType").value;
+    $("#camHik").classList.toggle("hidden", t !== "hik");
+    $("#camUrl").classList.toggle("hidden", t !== "url");
+    $("#camUsb").classList.toggle("hidden", t !== "usb");
+  }
+  $("#camType").addEventListener("change", () => { showCamType(); $("#camTestResult").replaceChildren(); $("#camTestResult").className = "cam-test"; });
+
+  function openCameraDialog(cam = null) {
+    editing = cam;
+    $("#camDlgTitle").textContent = cam ? `Edit ${cam.name}` : "Add camera";
+    $("#camDelete").classList.toggle("hidden", !cam);
+    $("#camName").value = cam ? cam.name : `Camera ${cameras.length + 1}`;
+    $("#camEnabled").checked = cam ? cam.enabled : true;
+    const h = cam?.hikvision;
+    const usb = cam && /^USB webcam #(\d+)$/.exec(cam.source);
+    $("#camType").value = h || !cam ? "hik" : usb ? "usb" : "url";
+    $("#hikIp").value = h?.ip || "";
+    $("#hikPort").value = h?.port || 554;
+    $("#hikUser").value = h ? h.username : "admin";
+    $("#hikPass").value = "";
+    $("#hikPass").placeholder = h?.has_password ? "(unchanged)" : "";
+    $("#hikCh").value = h?.channel || 1;
+    $("#hikStream").value = h?.stream || "sub";
+    $("#camSource").value = "";
+    $("#camSource").placeholder = cam && !h && !usb ? `${cam.source}  (leave empty to keep)` : "rtsp://user:password@192.168.1.50:554/stream";
+    $("#camUsbIdx").value = usb ? usb[1] : 0;
+    $("#camTestResult").replaceChildren(); $("#camTestResult").className = "cam-test";
+    showCamType();
+    camDlg.showModal();
+    (cam ? $("#camName") : $("#hikIp")).focus();
+  }
+
+  function cameraBody() {
+    const t = $("#camType").value;
+    const body = { name: $("#camName").value.trim(), enabled: $("#camEnabled").checked };
+    if (t === "hik") {
+      if (!$("#hikIp").value.trim()) throw new Error("Enter the camera's or NVR's IP address.");
+      body.hikvision = { ip: $("#hikIp").value.trim(), port: +$("#hikPort").value || 554, username: $("#hikUser").value.trim(),
+        password: $("#hikPass").value, channel: +$("#hikCh").value || 1, stream: $("#hikStream").value };
+    } else if (t === "url") {
+      const src = $("#camSource").value.trim();
+      if (src) body.source = src;
+      else if (!editing) throw new Error("Enter the camera's RTSP address.");
+    } else {
+      body.source = String(+$("#camUsbIdx").value || 0);
+    }
+    return body;
+  }
+
+  function camResult(kind, text, preview) {
+    const box = $("#camTestResult");
+    box.className = `cam-test ${kind}`;
+    box.replaceChildren(el("div", { textContent: text }), ...(preview ? [el("img", { src: preview, alt: "Camera preview" })] : []));
+  }
+
+  $("#camTest").addEventListener("click", async () => {
+    let body;
+    try { body = cameraBody(); } catch (err) { return camResult("err", err.message); }
+    if (editing) body.camera_id = editing.id;
+    if (!body.hikvision && !body.source) return camResult("err", "Enter an address to test.");
+    camResult("busy", "Testing… this can take up to 15 seconds.");
+    $("#camTest").disabled = true;
+    try {
+      const r = await api("/api/cameras/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      camResult(r.ok ? "ok" : "err", (r.ok ? "✓ " : "✗ ") + r.message, r.preview);
+    } catch (err) { camResult("err", err.message); }
+    finally { $("#camTest").disabled = false; }
   });
 
   $("#cameraForm").addEventListener("submit", async (e) => {
+    if (e.submitter && e.submitter.value !== "save") return;
     e.preventDefault();
-    const source = $("#cameraSource").value.trim();
-    if (!source) return;
+    let body;
+    try { body = cameraBody(); } catch (err) { return camResult("err", err.message); }
+    if (!body.name) return camResult("err", "Give the camera a name.");
+    $("#camSave").disabled = true;
     try {
-      await api("/api/camera", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ source }) });
-      toast("Switching camera…");
-      $("#cameraSource").value = "";
-    } catch (err) { toast(`Camera switch failed: ${err.message}`, { kind: "error" }); }
+      await api(editing ? `/api/cameras/${editing.id}` : "/api/cameras", {
+        method: editing ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      camDlg.close();
+      toast(editing ? `Saved ${body.name}` : `Added ${body.name}`);
+      await loadCameras();
+      if (editing && focusId === editing.id) openFocus(editing.id);
+    } catch (err) { camResult("err", err.message); }
+    finally { $("#camSave").disabled = false; }
+  });
+
+  $("#camDelete").addEventListener("click", async () => {
+    if (!editing || !confirm(`Delete camera “${editing.name}”? Its past detections stay in the history.`)) return;
+    try {
+      await api(`/api/cameras/${editing.id}`, { method: "DELETE" });
+      camDlg.close();
+      if (focusId === editing.id) closeFocus();
+      loadCameras();
+    } catch (err) { camResult("err", err.message); }
   });
 
   // ------------------------------------------------------------------ status
   function renderStatus(s) {
-    const pill = $("#statusPill");
-    if (!s.camera.connected) {
-      pill.className = "pill pill-warn";
-      pill.textContent = "Camera offline";
-    } else {
-      pill.className = "pill pill-ok";
-      pill.textContent = s.processing.active ? "Live · scanning" : "Live · idle";
+    camStatus = Object.fromEntries((s.cameras || []).map((c) => [c.id, c]));
+    if ((s.cameras || []).map((c) => c.id).join() !== cameras.map((c) => c.id).join()) loadCameras();
+    for (const tile of document.querySelectorAll(".cam-tile")) {
+      const st = camStatus[tile.dataset.id];
+      if (!st) continue;
+      tile.querySelector(".dot").className = "dot" + (st.enabled ? (st.connected ? " ok" : " off") : "");
+      tile.title = st.connected ? `${st.source} · ${st.capture_fps} fps` : (st.error || st.source);
     }
-    pill.title = s.camera.error || s.camera.source;
-    $("#camStats").textContent =
-      `${s.camera.source} · cam ${s.camera.capture_fps} fps · recog ${s.processing.process_fps} fps` +
-      ` · ${Math.round(s.processing.process_ms)} ms · ${s.known_embeddings} face embeddings`;
+    const enabled = (s.cameras || []).filter((c) => c.enabled);
+    const pill = $("#statusPill");
+    if (!enabled.length) { pill.className = "pill pill-warn"; pill.textContent = "No cameras"; }
+    else if (s.online === enabled.length) { pill.className = "pill pill-ok"; pill.textContent = enabled.length === 1 ? "Live" : `Live · ${enabled.length} cameras`; }
+    else { pill.className = "pill pill-warn"; pill.textContent = `${s.online}/${enabled.length} cameras online`; }
+    pill.title = enabled.filter((c) => !c.connected).map((c) => `${c.name}: ${c.error || "offline"}`).join("\n");
+
+    const parts = [];
+    const f = focusId !== null ? camStatus[focusId] : null;
+    if (f && f.processing) parts.push(`${f.capture_fps} fps · recog ${f.processing.process_fps ?? 0}/s · ${Math.round(f.processing.process_ms ?? 0)} ms`);
+    parts.push(`${s.known_embeddings} face photos`);
+    if (s.cloud?.enabled) parts.push(s.cloud.connected ? "website sync ✓" : "website sync offline");
+    $("#camStats").textContent = parts.join(" · ");
+    $("#camStats").title = s.cloud?.error || "";
   }
 
   // ------------------------------------------------------------------ alerts
@@ -297,6 +481,7 @@
     const name = $("#enrollName").value.trim();
     if (!name) return enrollMessage("Enter a name first, then face the camera.", false);
     const fd = new FormData(); fd.append("name", name);
+    if ($("#captureCamera").value) fd.append("camera_id", $("#captureCamera").value);
     e.target.disabled = true;
     try {
       await api("/api/people/capture", { method: "POST", body: fd });
@@ -466,13 +651,14 @@
 
   // ------------------------------------------------------------------ boot
   async function boot() {
-    startFeed();
     if (needsBackendUrl()) {
+      showFeedError();
       const pill = $("#statusPill");
       pill.className = "pill pill-warn"; pill.textContent = "Backend not set";
       setTimeout(() => { if (needsBackendUrl()) openSettings(); }, 3600);  // after the opening animation
       return;
     }
+    loadCameras();
     connectWs();
     const events = await loadHistory();
     $("#alerts").replaceChildren();

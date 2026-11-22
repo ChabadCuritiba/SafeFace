@@ -6,7 +6,12 @@ python-dotenv>=1.0
 
 # Vision
 numpy>=1.26
-opencv-python-headless>=4.9
-insightface>=0.7.3
+# insightface 2.x ships a ready-made wheel: no C++ compiler needed on Windows.
+# It pulls in opencv-python, so we use that instead of the headless build (avoids two cv2 copies).
+opencv-python>=4.9
+insightface>=2.0
+# Firebase sync to the website (optional - only used when backend/firebase-key.json exists)
+firebase-admin>=6.5
+
 # CPU inference. For an NVIDIA GPU, replace with: onnxruntime-gpu
 onnxruntime>=1.17

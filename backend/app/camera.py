@@ -75,8 +75,9 @@ class Camera:
         src = parse_source(self.source)
         if isinstance(src, str) and src.lower().startswith("rtsp"):
             # TCP is far more reliable than UDP over Wi-Fi / the internet.
-            os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|stimeout;5000000")
-            cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+            os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+            params = [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000, cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10000]
+            cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG, params)
         else:
             cap = cv2.VideoCapture(src)
         if isinstance(src, int):

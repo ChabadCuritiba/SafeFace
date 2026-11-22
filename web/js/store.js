@@ -81,6 +81,12 @@ export class FirebaseStore {
       (id, d) => ({ id, ...d }), cb, onError);
   }
 
+  /** Status written by the SafeFace PC server (cameras online, last heartbeat). cb(null) if none. */
+  onPcStatus(cb, onError) {
+    const { doc, onSnapshot } = this.fb;
+    return onSnapshot(doc(this.db, "system", "pc"), (d) => cb(d.exists() ? d.data() : null), onError);
+  }
+
   async addFaces(items) {
     const { doc, collection, writeBatch, serverTimestamp, increment } = this.fb;
     const batch = writeBatch(this.db);
@@ -170,6 +176,7 @@ export class LocalStore {
   onPeople(cb) { return this._on("people", cb); }
   onFaces(cb) { return this._on("faces", cb); }
   onEvents(cb) { return this._on("events", cb); }
+  onPcStatus(cb) { cb(null); return () => {}; }
 
   async addFaces(items) {
     const id = () => Math.random().toString(36).slice(2, 12);

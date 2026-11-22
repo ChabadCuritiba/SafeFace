@@ -22,11 +22,14 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .camera import describe_source
 from .config import settings
 from .database import Database
 from .hub import Hub
-from .pipeline import Pipeline, crop_face, event_to_json
+from .cloud import start_cloud
+from .pipeline import CameraManager, CameraWorker, crop_face, event_to_json
 from .recognizer import FaceEngine, FaceIndex
+from .rtsp import hikvision_url, parse_hikvision, probe, replace_password
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
 log = logging.getLogger("safeface")
@@ -39,7 +42,8 @@ class State:
     index: FaceIndex
     engine: FaceEngine
     hub: Hub
-    pipeline: Pipeline
+    cameras: CameraManager
+    cloud = None
 
 
 state = State()
@@ -56,13 +60,19 @@ async def lifespan(app: FastAPI):
     state.engine = await asyncio.to_thread(
         FaceEngine, settings.model_name, settings.det_size, settings.det_threshold, settings.providers
     )
-    state.pipeline = Pipeline(settings, state.db, state.engine, state.index, state.hub)
-    state.pipeline.start()
+    state.cloud = start_cloud(settings.firebase_credentials)
+    sinks = [state.cloud.push_event] if state.cloud else []
+    state.cameras = CameraManager(settings, state.db, state.engine, state.index, state.hub, sinks,
+                                  on_status=state.cloud.push_status if state.cloud else None)
+    state.cameras.extra_status = cloud_status
+    state.cameras.start()
     if not settings.api_key:
-        log.warning("API_KEY is not set - anyone who can reach this server can view the camera.")
+        log.warning("API_KEY is not set - anyone who can reach this server can view the cameras.")
     log.info("SafeFace ready.")
     yield
-    state.pipeline.stop()
+    state.cameras.stop()
+    if state.cloud:
+        state.cloud.mark_offline()
 
 
 app = FastAPI(title="SafeFace", version="1.0.0", lifespan=lifespan)
@@ -208,37 +218,59 @@ def health():
     return {"ok": True}
 
 
+def cloud_status() -> dict:
+    c = state.cloud
+    return {"cloud": {"enabled": True, "connected": c.connected, "project": c.project_id, "error": c.last_error}
+            if c else {"enabled": False}}
+
+
 @app.get("/api/status")
 def status():
-    return state.pipeline.status()
+    return state.cameras.status()
 
 
-@app.get("/api/stream")
-async def stream(request: Request):
-    """MJPEG stream - use directly as <img src="/api/stream">."""
+def worker_or_404(camera_id: int | None) -> CameraWorker:
+    w = state.cameras.get(camera_id) if camera_id is not None else state.cameras.first()
+    if w is None:
+        raise HTTPException(404, "Camera not found or disabled")
+    return w
+
+
+def mjpeg_response(request: Request, worker: CameraWorker) -> StreamingResponse:
     delay = 1.0 / max(settings.stream_fps, 1)
 
     async def frames():
         last = None
         while not await request.is_disconnected():
-            jpg = await asyncio.to_thread(state.pipeline.get_jpeg)
+            jpg = await asyncio.to_thread(worker.get_jpeg)
             if jpg and jpg is not last:
                 last = jpg
                 yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
                        + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n")
+            if worker._stop.is_set():  # camera was edited/removed
+                break
             await asyncio.sleep(delay)
 
-    return StreamingResponse(
-        frames(),
-        media_type="multipart/x-mixed-replace; boundary=frame",
-        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
-    )
+    return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
-@app.get("/api/snapshot.jpg")
-async def snapshot():
-    jpg = await asyncio.to_thread(state.pipeline.get_jpeg)
+@app.get("/api/cameras/{camera_id}/stream")
+async def camera_stream(camera_id: int, request: Request):
+    """MJPEG stream - use directly as <img src="/api/cameras/1/stream">."""
+    return mjpeg_response(request, worker_or_404(camera_id))
+
+
+@app.get("/api/cameras/{camera_id}/snapshot.jpg")
+async def camera_snapshot(camera_id: int):
+    jpg = await asyncio.to_thread(worker_or_404(camera_id).get_jpeg)
     return StreamingResponse(iter([jpg]), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/stream")
+async def stream(request: Request):
+    """Stream of the first camera (kept for compatibility)."""
+    return mjpeg_response(request, worker_or_404(None))
 
 
 # ---- people / enrolment ------------------------------------------------------
@@ -270,10 +302,10 @@ def add_person(name: str = Form(...), files: list[UploadFile] = File(...)):
 
 
 @app.post("/api/people/capture")
-def capture_person(name: str = Form(...)):
-    """Enrol a person from the current live camera frame (great for webcam testing)."""
+def capture_person(name: str = Form(...), camera_id: int | None = Form(None)):
+    """Enrol a person from a camera's current frame (great for webcam testing)."""
     name = clean_name(name)
-    frame = state.pipeline.current_frame()
+    frame = worker_or_404(camera_id).current_frame()
     if frame is None:
         raise HTTPException(503, "Camera has no frame yet")
     if state.engine.largest_face_embedding(frame) is None:
@@ -385,18 +417,121 @@ def clear_events():
     return {"cleared": True}
 
 
-# ---- camera ------------------------------------------------------------------
-class CameraBody(BaseModel):
-    source: str
+# ---- cameras -----------------------------------------------------------------
+class HikvisionFields(BaseModel):
+    ip: str
+    port: int = 554
+    username: str = ""
+    password: str = ""        # empty on edit = keep the saved password
+    channel: int = 1
+    stream: str = "sub"       # "sub" (lighter, recommended) or "main"
 
 
-@app.post("/api/camera")
-def set_camera(body: CameraBody):
-    """Switch source at runtime, e.g. {"source": "0"} or {"source": "rtsp://..."}."""
-    if not body.source.strip():
-        raise HTTPException(400, "source is required")
-    state.pipeline.switch_camera(body.source.strip())
-    return state.pipeline.status()
+class CameraIn(BaseModel):
+    name: str | None = None
+    source: str | None = None             # webcam index, rtsp:// URL or file path
+    hikvision: HikvisionFields | None = None
+    enabled: bool | None = None
+
+
+def camera_to_json(cam: dict) -> dict:
+    return {"id": cam["id"], "name": cam["name"], "enabled": bool(cam["enabled"]),
+            "source": describe_source(cam["source"]), "hikvision": parse_hikvision(cam["source"])}
+
+
+def build_source(body: CameraIn, old_source: str | None = None) -> str | None:
+    if body.hikvision:
+        h = body.hikvision
+        try:
+            src = hikvision_url(h.ip, h.username, h.password, h.channel, h.stream, h.port)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return replace_password(src, old_source) if old_source and not h.password else src
+    if body.source is not None:
+        src = body.source.strip()
+        if not src:
+            raise HTTPException(400, "Camera address is required")
+        return replace_password(src, old_source) if old_source else src
+    return None
+
+
+def clean_camera_name(name: str | None) -> str:
+    name = " ".join((name or "").split())
+    if not 1 <= len(name) <= 40:
+        raise HTTPException(400, "Camera name must be 1-40 characters")
+    return name
+
+
+@app.get("/api/cameras")
+def list_cameras():
+    return [camera_to_json(c) for c in state.db.list_cameras()]
+
+
+@app.post("/api/cameras")
+def add_camera(body: CameraIn):
+    source = build_source(body)
+    if not source:
+        raise HTTPException(400, "Give a Hikvision address or a camera source")
+    cam_id = state.db.add_camera(clean_camera_name(body.name), source, body.enabled is not False)
+    state.cameras.reload(cam_id)
+    return camera_to_json(state.db.get_camera(cam_id))
+
+
+@app.patch("/api/cameras/{camera_id}")
+def update_camera(camera_id: int, body: CameraIn):
+    cam = state.db.get_camera(camera_id)
+    if not cam:
+        raise HTTPException(404, "Camera not found")
+    state.db.update_camera(
+        camera_id,
+        name=clean_camera_name(body.name) if body.name is not None else None,
+        source=build_source(body, cam["source"]),
+        enabled=body.enabled,
+    )
+    state.cameras.reload(camera_id)
+    return camera_to_json(state.db.get_camera(camera_id))
+
+
+@app.delete("/api/cameras/{camera_id}")
+def delete_camera(camera_id: int):
+    if not state.db.get_camera(camera_id):
+        raise HTTPException(404, "Camera not found")
+    state.db.delete_camera(camera_id)
+    state.cameras.reload(camera_id)
+    return {"deleted": camera_id}
+
+
+class CameraTestIn(CameraIn):
+    camera_id: int | None = None   # when editing: reuse that camera's saved password
+
+
+@app.post("/api/cameras/test")
+def test_camera(body: CameraTestIn):
+    """Check a camera before saving: diagnose the RTSP login, then grab one frame."""
+    old = state.db.get_camera(body.camera_id)["source"] if body.camera_id and state.db.get_camera(body.camera_id) else None
+    source = build_source(body, old)
+    if not source:
+        raise HTTPException(400, "Nothing to test")
+    p = probe(source)
+    if not p.ok:
+        return {"ok": False, "code": p.code, "message": p.message}
+    src = int(source) if source.isdigit() else source
+    if isinstance(src, str) and src.lower().startswith("rtsp"):
+        cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 10000, cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10000])
+    else:
+        cap = cv2.VideoCapture(src)
+    try:
+        ok, frame = cap.read() if cap.isOpened() else (False, None)
+    finally:
+        cap.release()
+    if not ok or frame is None:
+        hint = ("The login worked but no video arrived. Set the camera's stream to H.264 (not H.265/H.264+) "
+                "under Configuration → Video/Audio, and try the sub-stream.") if p.code == "ok" else \
+               "Couldn't read video from this source. For a webcam, close other apps using it or try another number."
+        return {"ok": False, "code": "no_video", "message": hint}
+    h, w = frame.shape[:2]
+    return {"ok": True, "code": "ok", "message": f"Connected: {w}×{h} video.", "width": w, "height": h,
+            "preview": jpeg_data_url(frame, 640)}
 
 
 # ---- websocket ---------------------------------------------------------------
@@ -404,7 +539,7 @@ def set_camera(body: CameraBody):
 async def websocket(ws: WebSocket):
     await state.hub.connect(ws)
     try:
-        await ws.send_json({"type": "status", "status": state.pipeline.status()})
+        await ws.send_json({"type": "status", "status": status()})
         while True:
             await ws.receive_text()  # keep-alive pings from the browser
     except WebSocketDisconnect:

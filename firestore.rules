@@ -40,6 +40,11 @@ service cloud.firestore {
         && isDescriptor(request.resource.data.descriptor);
     }
 
+    // Written only by the SafeFace PC server (service account), read by the website.
+    match /system/{id} {
+      allow read: if allowed();
+    }
+
     match /events/{id} {
       allow read, delete: if allowed();
       allow create: if allowed()

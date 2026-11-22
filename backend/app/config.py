@@ -60,6 +60,11 @@ class Settings:
     # --- Storage ------------------------------------------------------------
     data_dir: Path = Path(os.getenv("DATA_DIR", str(BASE_DIR / "data")))
 
+    # --- Firebase sync (optional) -------------------------------------------
+    # Service-account key from Firebase console -> Project settings -> Service accounts.
+    # When the file exists, detections and camera status are mirrored to the website.
+    firebase_credentials: Path = Path(os.getenv("FIREBASE_CREDENTIALS", str(BASE_DIR / "firebase-key.json")))
+
     # --- Web ----------------------------------------------------------------
     # If set, every /api, /media and /ws request must carry this key
     # (header "X-API-Key" or query "?key="). STRONGLY recommended when the

@@ -128,7 +128,13 @@ Then open http://127.0.0.1:5000/?emulators=1
 
 # Part B: PC server (for Hikvision / RTSP cameras)
 
-The Python server runs 24/7 on a PC on the same network as the cameras and serves its own dashboard at http://localhost:8000.
+The Python server runs 24/7 on a PC on the same network as the cameras and serves its own dashboard at http://localhost:8000. It watches **several cameras at once** (Hikvision cameras, NVR channels, any RTSP camera, USB webcams), and can **send every detection to the SafeFace website** so you get the alerts on any phone.
+
+**Quick start on Windows**
+1. `git clone -b claude/face-recognition-security-camera-5bpwi4 https://github.com/ChabadCuritiba/SafeFace.git C:\SafeFace`
+2. Double-click **`C:\SafeFace\run.bat`**. It offers to install Python if needed, installs everything else (5–10 minutes the first time), and opens the dashboard.
+3. Click **+ Add camera**, choose *Hikvision camera or NVR channel*, enter the IP, username, password and channel, then click **Test connection** and **Save**. Repeat for each camera.
+4. *(Optional)* Turn on the website sync (§5) and auto-start (`install-autostart.bat`).
 
 - **Backend:** Python, FastAPI, OpenCV, InsightFace (ArcFace `buffalo_l`), ONNX Runtime
 - **Storage:** SQLite for people, embeddings and events. Face embeddings sit in an in-memory NumPy vector index.
@@ -211,18 +217,16 @@ SafeFace/
 
 ### Prerequisites
 
-- **Python 3.10–3.12** recommended. 3.13 also works.
-- A **C/C++ compiler**, because `insightface` builds a small extension during install:
-  - Ubuntu/Debian: `sudo apt install build-essential python3-dev python3-venv`
-  - macOS: `xcode-select --install`
-  - Windows: install **"Visual Studio Build Tools" → "Desktop development with C++"**
-- A webcam, for testing.
+- **Python 3.11 or 3.12** recommended (3.10 and 3.13 also work). On Windows, `run.bat` offers to install it for you via `winget`.
+- No compiler or Visual Studio Build Tools needed. Every package installs from ready-made wheels.
+- A webcam for testing, or your IP cameras.
 
 ### Install and run
 
 ```bash
-git clone <this repo> SafeFace && cd SafeFace
-./run.sh            # Windows: run.bat
+git clone -b claude/face-recognition-security-camera-5bpwi4 https://github.com/ChabadCuritiba/SafeFace.git
+cd SafeFace
+./run.sh            # Windows: double-click run.bat
 ```
 
 Or set it up by hand:
@@ -240,24 +244,26 @@ Open **http://localhost:8000**.
 
 On first start InsightFace downloads the `buffalo_l` model pack (about 280 MB) to `~/.insightface/models/`. Later starts take a few seconds.
 
+**Start automatically with Windows:** double-click `install-autostart.bat`. SafeFace then starts minimised whenever you log in (undo with `remove-autostart.bat`). For an unattended PC, also turn on automatic Windows login and the BIOS option *"Restore on AC power loss"*, so it comes back after a power cut.
+
 > **GPU (optional):** with an NVIDIA GPU and CUDA installed, run `pip uninstall onnxruntime && pip install onnxruntime-gpu`. SafeFace picks up the GPU automatically.
 
 ---
 
 ## 3. Testing with a standard webcam
 
-1. **Start the server** with the default `CAMERA_SOURCE=0`, which is the first webcam. Your face should appear in the *Live camera* panel with a red **Unknown** box around it.
-   - Is the feed black, or showing "NO SIGNAL"? Try `CAMERA_SOURCE=1`. On macOS, also allow camera access for your terminal under *System Settings → Privacy → Camera*.
+1. **Start the server.** On first run it creates *Camera 1* from `CAMERA_SOURCE` (default `0`, the first webcam). Your face should appear in the *Cameras* panel with a red **Unknown** box around it.
+   - Showing "NO SIGNAL"? Click ✎ on the tile, choose *USB webcam* and try number 1. On macOS, also allow camera access for your terminal under *System Settings → Privacy → Camera*.
 2. **Enrol yourself.** Open **People database** and use any of these:
    - **Add faces from a photo:** choose any photo, even a group photo. Every face gets a numbered box; type a name next to the faces you want and click **Add selected faces**. Faces that are already enrolled show in green with their name.
-   - **Capture from camera:** type your name and click **📸 Capture from camera** 2–3 times while turning your head slightly.
+   - **Capture from camera:** type your name, pick the camera and click **📸 Capture from** 2–3 times while turning your head slightly.
    - **Several photos of one person:** type a name, drop in 3–5 photos (clear, front-facing, different lighting and angles) and click **Upload & enrol**.
    - **From a detection:** click **+ Add face** on any row in *Detection history* or *Live alerts* to name that snapshot, for example to identify an "Unknown". Set `LOG_UNKNOWN=true` so unknown faces get logged.
 3. **Walk out of frame and back in.** The box turns green with your name and a match percentage. A toast and a sound fire, and a new row with a snapshot appears in **Detection history** and **Live alerts**.
 4. **Check the motion gate.** Sit perfectly still. After about 3 s the status pill changes to **Live · idle** and recognition stops. Move and it switches back to **scanning**.
 5. **Test a second person.** Hold up a photo of someone else on your phone. Enrol them, then show the photo again.
 
-No webcam? Point `CAMERA_SOURCE` at any video file (`CAMERA_SOURCE=/path/to/video.mp4`). It loops forever.
+No webcam? Add a camera of type *Other IP camera* and give it the path of any video file. It loops forever.
 
 You can also exercise the API from a terminal:
 
@@ -271,26 +277,44 @@ Interactive API docs are at **http://localhost:8000/docs**.
 
 ---
 
-## 4. Switching to an RTSP security camera
+## 4. Adding cameras (Hikvision and others)
 
-1. **Find the camera's RTSP URL.** Common patterns:
+Cameras are managed in the dashboard and saved in the database. `CAMERA_SOURCE` in `.env` is only used to create *Camera 1* on the very first run.
 
-   | Brand | URL |
+**Hikvision: cameras or NVR channels**
+1. Find the IP address: use Hikvision's free **SADP** tool, the NVR screen (*Menu → Camera → IP Camera*), or your router's device list. If the cameras plug into the back of an NVR, use the **NVR's** IP for all of them.
+2. In the camera's (or NVR's) web page, set the **sub-stream to H.264** (not H.265/H.264+), 640×360–720p, 10–15 fps, and create a viewer-only user for SafeFace.
+3. In SafeFace click **+ Add camera** → *Hikvision camera or NVR channel*:
+
+   | Field | Camera on its own | Through an NVR |
+   |---|---|---|
+   | IP address | the camera's IP | the NVR's IP |
+   | Channel | `1` | the camera's number on the NVR (`1`, `2`, `3`…) |
+   | Stream | Sub-stream | Sub-stream |
+
+4. Click **Test connection**. It tells you exactly what's wrong, or shows a preview frame:
+
+   | Result | Meaning |
    |---|---|
-   | Hikvision | `rtsp://user:pass@IP:554/Streaming/Channels/102` (`101` = main, `102` = sub-stream) |
-   | Dahua / Amcrest | `rtsp://user:pass@IP:554/cam/realmonitor?channel=1&subtype=1` |
-   | Reolink | `rtsp://user:pass@IP:554/h264Preview_01_sub` |
-   | TP-Link Tapo | `rtsp://user:pass@IP:554/stream2` (create a *camera account* in the app first) |
-   | Intelbras | `rtsp://user:pass@IP:554/cam/realmonitor?channel=1&subtype=1` |
-   | Generic ONVIF | check with the **ONVIF Device Manager** tool |
+   | ✓ Connected | Save it |
+   | No answer / can't reach | Wrong IP, or this PC isn't on the cameras' network |
+   | Port is closed | RTSP is disabled (*Network → Advanced → Integration Protocol*) or wrong port |
+   | Wrong username or password | Careful: Hikvision locks the account for 30 minutes after several wrong tries |
+   | Channel doesn't exist | Wrong channel number |
+   | Login worked but no video | Set the stream to plain **H.264** |
 
-   URL-encode special characters in the password (`@` → `%40`, `#` → `%23`).
+Passwords with special characters (`@ # !`) are handled automatically. The saved password is never shown again in the dashboard: leave the field empty when editing to keep it.
 
-2. **Test the URL first** in VLC (*Media → Open Network Stream*) or with `ffplay "rtsp://..."`.
+**Other brands:** choose *Other IP camera (RTSP address)* and paste the address:
 
-3. **Point SafeFace at it**, either way:
-   - permanently: set `CAMERA_SOURCE=rtsp://...` in `backend/.env` and restart, or
-   - at runtime: paste the URL into the *Camera source* box under the video and click **Switch**. This resets on restart.
+| Brand | RTSP address |
+|---|---|
+| Dahua / Amcrest / Intelbras | `rtsp://user:pass@IP:554/cam/realmonitor?channel=1&subtype=1` |
+| Reolink | `rtsp://user:pass@IP:554/h264Preview_01_sub` |
+| TP-Link Tapo | `rtsp://user:pass@IP:554/stream2` (create a *camera account* in the app first) |
+| Generic ONVIF | check with the **ONVIF Device Manager** tool |
+
+**How many cameras?** Every camera gets its own capture thread, and they share one face model. Recognition only runs while a camera sees motion, so the real limit is how many cameras see people *at the same time*. Roughly: a modern i5/i7/Ryzen handles 4–6 busy cameras (use `MODEL_NAME=buffalo_s` and `PROCESS_FPS=2` for more), and a PC with an NVIDIA GPU handles 15–30.
 
 **Tips**
 
@@ -301,13 +325,30 @@ Interactive API docs are at **http://localhost:8000/docs**.
 
 ---
 
-## 5. Remote access to the PC server
+## 5. Alerts on your phone: sync to the SafeFace website
 
-The PC server serves its own dashboard, so to reach it from outside the building you only need a secure public address for the PC. The website on Firebase (Part A) is separate and isn't needed for this.
+The PC can send every detection (name, time, match score, camera, snapshot) and its camera status to Firebase. You then open **https://safeface-3bc6e.web.app** on any phone or computer, sign in, and see the PC's alerts live, with no tunnel or port-forwarding. Live video stays on your local network.
+
+1. Do the one-time Firebase setup and deploy from **Part A** (A2–A3). Use the latest code so `firestore.rules` includes the `system` collection.
+2. In the Firebase console: *Project settings → Service accounts → **Generate new private key***. A `.json` file downloads.
+3. Rename it to **`firebase-key.json`** and put it in **`C:\SafeFace\backend\`**.
+4. Restart `run.bat`. The window shows `Firebase sync on (project safeface-3bc6e)`, and the dashboard shows **website sync ✓**.
+
+On the website you'll see a **PC: 3/3 cameras** badge, which turns into **PC offline** if the PC stops reporting for 5 minutes. PC detections appear in *Live alerts* and *Detection history*, with the camera name.
+
+> ⚠️ `firebase-key.json` gives full control of your Firebase project. Keep it only on the SafeFace PC. Never email it or put it in git (`.gitignore` already excludes it). If it leaks, delete it under *Service accounts → Manage keys* and generate a new one.
+
+Notes:
+- People are enrolled **on the PC** for the PC cameras. The website's own people list is used by browser cameras only, because the two use different AI models.
+- If the internet goes down, detections are kept in a queue and sent when it comes back. Everything still works locally.
+- Free-plan usage: 2 writes per detection plus about 720 status updates per day, well within 20,000 writes/day.
+
+## 6. Remote access to the PC dashboard (optional)
+
+To see the PC's **live video** from outside the building, give the PC a secure public address.
 
 1. In `backend/.env`, set a key so strangers can't open your cameras:
    ```ini
-   CAMERA_SOURCE=rtsp://user:pass@192.168.1.64:554/Streaming/Channels/102
    API_KEY=<a long random string>     # e.g. python -c "import secrets;print(secrets.token_urlsafe(32))"
    ```
 2. Start the server (`run.bat` / `./run.sh`), or use Docker:
@@ -348,14 +389,15 @@ Cloud Run's disk is **ephemeral**: mount a Cloud Storage bucket at `/data`, or e
 
 ---
 
-## 6. Configuration reference
+## 7. Configuration reference
 
 All settings are environment variables. You can also put them in `backend/.env`.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CAMERA_SOURCE` | `0` | Webcam index, `rtsp://…` URL, or video file path |
-| `PROCESS_FPS` | `3` | Recognition passes per second |
+| `CAMERA_SOURCE` | `0` | First-run only: source for *Camera 1* (cameras are then managed in the dashboard) |
+| `FIREBASE_CREDENTIALS` | `backend/firebase-key.json` | Service-account key; when present, detections sync to the website |
+| `PROCESS_FPS` | `3` | Recognition passes per second, per camera |
 | `STREAM_FPS` | `12` | Frame rate of the browser video |
 | `MOTION_ENABLED` | `true` | Only recognise while there's motion |
 | `MOTION_THRESHOLD` | `0.004` | Fraction of pixels that must change. Raise it if trees or rain trigger it. |
@@ -383,36 +425,41 @@ Typical scores are 0.6–0.9 for the same person and below 0.3 for different peo
 
 ---
 
-## 7. API summary
+## 8. API summary
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/health` | Liveness check (no auth) |
 | GET | `/api/status` | Camera, FPS, processing time, number of embeddings |
-| GET | `/api/stream` | MJPEG live video with overlays |
-| GET | `/api/snapshot.jpg` | Single annotated frame |
+| GET | `/api/cameras` | List cameras (passwords hidden) |
+| POST | `/api/cameras` | Add: `{"name":"Door","hikvision":{"ip":"192.168.1.64","username":"admin","password":"…","channel":1}}` or `{"name":"…","source":"rtsp://…"}` |
+| PATCH | `/api/cameras/{id}` | Edit name / address / `enabled` (empty password = keep) |
+| DELETE | `/api/cameras/{id}` | Remove a camera |
+| POST | `/api/cameras/test` | Diagnose a camera before saving; returns a preview frame |
+| GET | `/api/cameras/{id}/stream` | MJPEG live video with overlays |
+| GET | `/api/cameras/{id}/snapshot.jpg` | Single annotated frame |
 | GET | `/api/people` | Enrolled people |
 | POST | `/api/people` | Form fields `name` and `files` (one or more images): enrol or add photos |
-| POST | `/api/people/capture` | Form field `name`: enrol from the current camera frame |
+| POST | `/api/people/capture` | Form fields `name`, `camera_id`: enrol from a camera's current frame |
 | POST | `/api/photos/detect` | Form field `file`: find every face in a photo, with boxes, thumbnails and existing matches |
 | POST | `/api/photos/{upload_id}/enroll` | `{"faces":[{"index":0,"name":"Ana"}]}`: save the chosen faces from that photo |
 | POST | `/api/events/{id}/enroll` | `{"name":"Ana"}`: add the face from a detection snapshot |
 | DELETE | `/api/people/{id}` | Remove a person and their photos |
 | GET | `/api/events?limit=&offset=&name=` | Detection history |
 | DELETE | `/api/events` | Clear history and snapshots |
-| POST | `/api/camera` | `{"source": "rtsp://..."}`: switch camera at runtime |
-| WS | `/ws` | Pushes `{"type":"detection","event":{...}}` and `{"type":"status",...}` |
+| WS | `/ws` | Pushes `{"type":"detection","event":{...}}` and `{"type":"status",...}` (all cameras) |
 
 Auth: send the header `X-API-Key: <key>` or the query parameter `?key=<key>`. The query form is needed for `<img>` and WebSocket URLs.
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `pip install insightface` fails with a compiler error | Install the build tools from §2. On Windows, use Python 3.10–3.12. |
-| "NO SIGNAL / Cannot open …" | Wrong webcam index or RTSP URL. Test the URL in VLC. Check the camera's username and password, and that port 554 is reachable. |
+| Install fails | Check the internet connection and run `run.bat` again; it continues where it stopped. Use Python 3.11 or 3.12. |
+| "NO SIGNAL / Cannot open …" | Click ✎ on the camera → **Test connection** for the exact reason (§4) |
+| Dashboard says "website sync offline" | No internet, or `firebase-key.json` belongs to a different project. Detections are queued and sent later. |
 | Video lags several seconds behind | Use the camera's sub-stream. Lag shouldn't build up, because only the newest frame is kept. |
 | High CPU | Lower `PROCESS_FPS` to 1–2, use `MODEL_NAME=buffalo_s` and `DET_SIZE=480`, and keep `MOTION_ENABLED=true` |
 | Dashboard shows "Disconnected" | Check that `run.bat` is still running. Then check the API key in ⚙ Settings. |
@@ -422,7 +469,7 @@ Auth: send the header `X-API-Key: <key>` or the query parameter `?key=<key>`. Th
 
 ---
 
-## 9. Privacy and legal note
+## 10. Privacy and legal note
 
 Face templates are **biometric data**. Under Brazil's LGPD, as under the GDPR and similar laws, biometric data is *sensitive personal data*. Before deploying:
 

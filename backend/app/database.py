@@ -31,6 +31,17 @@ CREATE TABLE IF NOT EXISTS events (
     camera        TEXT,
     timestamp     REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS cameras (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    source      TEXT NOT NULL,           -- webcam index, rtsp:// URL or file path (may contain a password)
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    created_at  REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_embeddings_person ON embeddings(person_id);
 """
@@ -108,6 +119,37 @@ class Database:
             "SELECT e.person_id, p.name, e.vector FROM embeddings e JOIN people p ON p.id = e.person_id"
         )
         return [(r["person_id"], r["name"], np.frombuffer(r["vector"], dtype=np.float32)) for r in rows]
+
+    # ---- cameras --------------------------------------------------------
+    def list_cameras(self) -> list[dict[str, Any]]:
+        return self._query("SELECT * FROM cameras ORDER BY id")
+
+    def get_camera(self, camera_id: int) -> dict[str, Any] | None:
+        rows = self._query("SELECT * FROM cameras WHERE id = ?", (camera_id,))
+        return rows[0] if rows else None
+
+    def add_camera(self, name: str, source: str, enabled: bool = True) -> int:
+        return self._exec(
+            "INSERT INTO cameras (name, source, enabled, created_at) VALUES (?, ?, ?, ?)",
+            (name, source, int(enabled), time.time()),
+        ).lastrowid
+
+    def update_camera(self, camera_id: int, **fields: Any) -> None:
+        allowed = {k: v for k, v in fields.items() if k in ("name", "source", "enabled") and v is not None}
+        if not allowed:
+            return
+        cols = ", ".join(f"{k} = ?" for k in allowed)
+        self._exec(f"UPDATE cameras SET {cols} WHERE id = ?", (*[int(v) if isinstance(v, bool) else v for v in allowed.values()], camera_id))
+
+    def delete_camera(self, camera_id: int) -> None:
+        self._exec("DELETE FROM cameras WHERE id = ?", (camera_id,))
+
+    def get_meta(self, key: str) -> str | None:
+        rows = self._query("SELECT value FROM meta WHERE key = ?", (key,))
+        return rows[0]["value"] if rows else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._exec("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
 
     # ---- events ---------------------------------------------------------
     def add_event(

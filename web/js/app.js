@@ -135,7 +135,8 @@ function onSignedOut() {
   state.user = null;
   stopCamera();
   state.unsubs.forEach((u) => u()); state.unsubs = [];
-  state.people = []; state.faces = []; state.events = []; state.seen.clear(); state.eventsLoaded = false;
+  state.people = []; state.faces = []; state.events = []; state.seen.clear(); state.eventsLoaded = false; state.pc = null;
+  renderPcBadge();
   renderPeople(); renderEvents([]);
   banner("");
   $("#userChip").classList.add("hidden");
@@ -163,8 +164,31 @@ function subscribe() {
     s.onPeople((list) => { state.people = list; renderPeople(); }, onDbError),
     s.onFaces((list) => { state.faces = list; updateStats(); }, onDbError),
     s.onEvents(onEvents, onDbError),
+    s.onPcStatus((st) => { state.pc = st; renderPcBadge(); }, () => { state.pc = null; renderPcBadge(); }),
   ];
 }
+
+// ---- status of the SafeFace PC server (Hikvision cameras), if one syncs to this project
+const PC_OFFLINE_AFTER = 5 * 60 * 1000;  // the PC refreshes its status every 2 minutes
+function renderPcBadge() {
+  const b = $("#pcBadge"), st = state.pc;
+  if (!st) { b.classList.add("hidden"); return; }
+  const cams = st.cameras || [];
+  const enabled = cams.filter((c) => c.enabled !== false);
+  const online = enabled.filter((c) => c.connected).length;
+  const alive = st.online && Date.now() - (st.updatedAt || 0) < PC_OFFLINE_AFTER;
+  b.classList.remove("hidden");
+  if (!alive) {
+    b.className = "pill pill-off";
+    b.textContent = "PC offline";
+    b.title = `The SafeFace PC hasn't reported since ${st.updatedAt ? fmtTime(st.updatedAt) : "?"}. Check that it's on and run.bat is running.`;
+  } else {
+    b.className = `pill ${online === enabled.length ? "pill-ok" : "pill-warn"}`;
+    b.textContent = `PC: ${online}/${enabled.length} cameras`;
+    b.title = enabled.map((c) => `${c.connected ? "●" : "○"} ${c.name}`).join("\n") + `\nUpdated ${fmtAgo(st.updatedAt)}`;
+  }
+}
+setInterval(renderPcBadge, 30000);
 
 // ============================================================================ camera
 const video = $("#video"), overlay = $("#overlay"), octx = overlay.getContext("2d");
