@@ -37,6 +37,10 @@ class Settings:
     # --- Processing ---------------------------------------------------------
     process_fps: float = float(os.getenv("PROCESS_FPS", "3"))  # recognition passes/sec
     stream_fps: float = float(os.getenv("STREAM_FPS", "12"))  # MJPEG frames/sec to browser
+    # Fast face tracking between recognition passes so boxes follow moving faces.
+    # 0 turns it off (boxes then move only at PROCESS_FPS).
+    track_fps: float = float(os.getenv("TRACK_FPS", "8"))
+    track_size: int = int(os.getenv("TRACK_SIZE", "320"))
     stream_quality: int = int(os.getenv("STREAM_JPEG_QUALITY", "70"))
     motion_enabled: bool = _bool("MOTION_ENABLED", True)
     motion_threshold: float = float(os.getenv("MOTION_THRESHOLD", "0.004"))  # fraction of pixels changed

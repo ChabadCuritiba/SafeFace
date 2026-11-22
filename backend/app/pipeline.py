@@ -12,6 +12,7 @@ import logging
 import re
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -29,7 +30,9 @@ log = logging.getLogger(__name__)
 
 GREEN = (80, 200, 60)
 RED = (60, 60, 230)
+GREY = (170, 170, 170)  # face found by the tracker, name not checked yet
 OVERLAY_TTL = 1.5  # seconds a box stays on screen after the last detection
+STREAM_MAX_WIDTH = 1280  # frames wider than this are downscaled before JPEG encoding
 
 # Called for every logged detection: (event dict, face crop as BGR image)
 EventSink = Callable[[dict, np.ndarray], None]
@@ -44,6 +47,28 @@ def crop_face(frame: np.ndarray, bbox: tuple[int, int, int, int], margin: float 
     h, w = frame.shape[:2]
     mx, my = int((x2 - x1) * margin), int((y2 - y1) * margin)
     return frame[max(0, y1 - my): min(h, y2 + my), max(0, x1 - mx): min(w, x2 + mx)].copy()
+
+
+def _best_match(bbox, prev: list[DetectedFace], used: set[int]) -> int | None:
+    """Index of the previous face that this new box most likely belongs to."""
+    x1, y1, x2, y2 = bbox
+    cx, cy, size = (x1 + x2) / 2, (y1 + y2) / 2, max(x2 - x1, y2 - y1)
+    best, best_score = None, 0.0
+    for i, f in enumerate(prev):
+        if i in used:
+            continue
+        a1, b1, a2, b2 = f.bbox
+        iw, ih = max(0, min(x2, a2) - max(x1, a1)), max(0, min(y2, b2) - max(y1, b1))
+        inter = iw * ih
+        union = (x2 - x1) * (y2 - y1) + (a2 - a1) * (b2 - b1) - inter
+        iou = inter / union if union else 0.0
+        # fast movement can drop the overlap to zero: fall back to centre distance
+        dist = ((cx - (a1 + a2) / 2) ** 2 + (cy - (b1 + b2) / 2) ** 2) ** 0.5
+        closeness = max(0.0, 1 - dist / (1.5 * max(size, a2 - a1, b2 - b1)))
+        score = max(iou, 0.5 * closeness)
+        if score > best_score and score >= 0.15:
+            best, best_score = i, score
+    return best
 
 
 def event_to_json(event: dict) -> dict:
@@ -73,7 +98,7 @@ class CameraWorker:
         self._jpeg_cache: tuple[tuple, bytes] | None = None
         self._jpeg_lock = threading.Lock()
 
-        self.stats = {"process_fps": 0.0, "process_ms": 0.0, "motion": False, "active": False, "faces": 0}
+        self.stats = {"process_fps": 0.0, "process_ms": 0.0, "track_ms": 0.0, "motion": False, "active": False, "faces": 0}
 
     # ------------------------------------------------------------------ control
     def start(self) -> None:
@@ -117,8 +142,10 @@ class CameraWorker:
 
     # ------------------------------------------------------------------ main loop
     def _run(self) -> None:
-        interval = 1.0 / max(self.cfg.process_fps, 0.1)
-        last_id, passes, t_stats = -1, 0, time.time()
+        rec_interval = 1.0 / max(self.cfg.process_fps, 0.1)
+        tick = 1.0 / self.cfg.track_fps if self.cfg.track_fps > 0 else rec_interval
+        tick = min(tick, rec_interval)
+        last_id, passes, t_stats, last_rec = -1, 0, time.time(), 0.0
         while not self._stop.is_set():
             loop_start = time.time()
             frame_id, frame, _ = self.camera.read()
@@ -131,29 +158,62 @@ class CameraWorker:
                 active = motion or (loop_start - self._last_activity) < self.cfg.motion_hold_seconds
                 self.stats["motion"], self.stats["active"] = motion, active
 
-                if active:
-                    t0 = time.time()
-                    try:
-                        faces = self.engine.detect(frame, self.cfg.min_face_size)
-                    except Exception:  # never let one bad frame kill the loop
-                        log.exception("Detection failed on %s", self.name)
-                        faces = []
-                    for f in faces:
-                        f.person_id, f.name, f.confidence = self.index.match(f.embedding, self.cfg.match_threshold)
-                    self.stats["process_ms"] = (time.time() - t0) * 1000
-                    self.stats["faces"] = len(faces)
+                if active and loop_start - last_rec >= rec_interval:
+                    last_rec = loop_start
+                    self._recognise(frame)
                     passes += 1
-                    if faces:
-                        self._last_activity = time.time()
-                        with self._faces_lock:
-                            self._faces, self._faces_time = faces, time.time()
-                        self._handle_events(frame, faces)
+                elif active and self.cfg.track_fps > 0:
+                    self._track(frame)
 
             now = time.time()
             if now - t_stats >= 2:
                 self.stats["process_fps"] = passes / (now - t_stats)
                 passes, t_stats = 0, now
-            self._stop.wait(max(0.0, interval - (time.time() - loop_start)))
+            self._stop.wait(max(0.0, tick - (time.time() - loop_start)))
+
+    def _recognise(self, frame: np.ndarray) -> None:
+        """Full pass: detect + embed + match. Sets names and logs events."""
+        t0 = time.time()
+        try:
+            faces = self.engine.detect(frame, self.cfg.min_face_size)
+        except Exception:  # never let one bad frame kill the loop
+            log.exception("Detection failed on %s", self.name)
+            return
+        for f in faces:
+            f.person_id, f.name, f.confidence = self.index.match(f.embedding, self.cfg.match_threshold)
+        self.stats["process_ms"] = (time.time() - t0) * 1000
+        self.stats["faces"] = len(faces)
+        if faces:
+            self._last_activity = time.time()
+        with self._faces_lock:
+            self._faces, self._faces_time = faces, time.time()
+        if faces:
+            self._handle_events(frame, faces)
+
+    def _track(self, frame: np.ndarray) -> None:
+        """Fast pass between recognitions: find face positions only and move the
+        existing boxes (keeping their names) so they follow people smoothly."""
+        t0 = time.time()
+        try:
+            boxes = self.engine.detect_boxes(frame, self.cfg.track_size, self.cfg.min_face_size)
+        except Exception:
+            log.exception("Tracking failed on %s", self.name)
+            return
+        self.stats["track_ms"] = (time.time() - t0) * 1000
+        with self._faces_lock:
+            prev = list(self._faces) if time.time() - self._faces_time < OVERLAY_TTL else []
+        updated, used = [], set()
+        for bbox, score in boxes:
+            j = _best_match(bbox, prev, used)
+            if j is not None:
+                used.add(j)
+                updated.append(replace(prev[j], bbox=bbox))
+            else:
+                updated.append(DetectedFace(bbox, score, None, name="…", pending=True))
+        if updated:
+            self._last_activity = time.time()
+        with self._faces_lock:
+            self._faces, self._faces_time = updated, time.time()
 
     def _handle_events(self, frame: np.ndarray, faces: list[DetectedFace]) -> None:
         now = time.time()
@@ -182,14 +242,20 @@ class CameraWorker:
 
     # ------------------------------------------------------------------ video out
     def _annotate(self, frame: np.ndarray, faces: list[DetectedFace]) -> np.ndarray:
-        img = frame.copy()
+        # Big main-stream frames (2K/4K) are shrunk for the browser: far less to encode and send.
+        k = min(1.0, STREAM_MAX_WIDTH / frame.shape[1])
+        if k < 1:
+            img = cv2.resize(frame, (STREAM_MAX_WIDTH, int(frame.shape[0] * k)), interpolation=cv2.INTER_AREA)
+            faces = [replace(f, bbox=tuple(int(v * k) for v in f.bbox)) for f in faces]
+        else:
+            img = frame.copy()
         scale = max(img.shape[1] / 1280, 0.5)
         thick = max(1, int(2 * scale))
         for f in faces:
             x1, y1, x2, y2 = f.bbox
             known = f.person_id is not None
-            color = GREEN if known else RED
-            label = f"{f.name} {f.confidence * 100:.0f}%" if known else "Unknown"
+            color = GREY if f.pending else GREEN if known else RED
+            label = "..." if f.pending else f"{f.name} {f.confidence * 100:.0f}%" if known else "Unknown"
             cv2.rectangle(img, (x1, y1), (x2, y2), color, max(2, int(2 * scale)))
             (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6 * scale, thick)
             ty = max(y1, th + base + 6)

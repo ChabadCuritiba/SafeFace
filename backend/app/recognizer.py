@@ -15,10 +15,11 @@ log = logging.getLogger(__name__)
 class DetectedFace:
     bbox: tuple[int, int, int, int]  # x1, y1, x2, y2 (pixels)
     det_score: float
-    embedding: np.ndarray  # L2-normalised float32 (512,)
+    embedding: np.ndarray | None  # L2-normalised float32 (512,); None for tracking-only boxes
     name: str = "Unknown"
     person_id: int | None = None
     confidence: float = 0.0  # cosine similarity to best match
+    pending: bool = False  # new face seen by the fast tracker, not recognised yet
 
 
 class FaceEngine:
@@ -56,6 +57,20 @@ class FaceEngine:
             if emb is None:
                 continue
             out.append(DetectedFace((x1, y1, x2, y2), float(f.det_score), emb.astype(np.float32)))
+        return out
+
+    def detect_boxes(self, bgr: np.ndarray, size: int = 320, min_face_size: int = 0) -> list[tuple[tuple[int, int, int, int], float]]:
+        """Fast detection only (no recognition), at a small input size: used to move
+        boxes smoothly between the slower recognition passes."""
+        with self._lock:
+            bboxes, _ = self._app.det_model.detect(bgr, input_size=(size, size))
+        h, w = bgr.shape[:2]
+        out = []
+        for b in bboxes:
+            x1, y1, x2, y2 = (int(round(v)) for v in b[:4])
+            x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
+            if min(x2 - x1, y2 - y1) >= min_face_size:
+                out.append(((x1, y1, x2, y2), float(b[4])))
         return out
 
     def largest_face_embedding(self, bgr: np.ndarray) -> tuple[np.ndarray, tuple[int, int, int, int]] | None:

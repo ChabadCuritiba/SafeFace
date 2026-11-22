@@ -399,6 +399,7 @@ All settings are environment variables. You can also put them in `backend/.env`.
 | `FIREBASE_CREDENTIALS` | `backend/firebase-key.json` | Service-account key; when present, detections sync to the website |
 | `PROCESS_FPS` | `3` | Recognition passes per second, per camera |
 | `STREAM_FPS` | `12` | Frame rate of the browser video |
+| `TRACK_FPS` | `8` | Fast face-position updates between recognitions, so boxes follow moving people (`0` = off, saves CPU) |
 | `MOTION_ENABLED` | `true` | Only recognise while there's motion |
 | `MOTION_THRESHOLD` | `0.004` | Fraction of pixels that must change. Raise it if trees or rain trigger it. |
 | `MOTION_HOLD_SECONDS` | `3` | Keep scanning this long after the last motion or face |
@@ -461,7 +462,8 @@ Auth: send the header `X-API-Key: <key>` or the query parameter `?key=<key>`. Th
 | "NO SIGNAL / Cannot open …" | Click ✎ on the camera → **Test connection** for the exact reason (§4) |
 | Dashboard says "website sync offline" | No internet, or `firebase-key.json` belongs to a different project. Detections are queued and sent later. |
 | Video lags several seconds behind | Use the camera's sub-stream. Lag shouldn't build up, because only the newest frame is kept. |
-| High CPU | Lower `PROCESS_FPS` to 1–2, use `MODEL_NAME=buffalo_s` and `DET_SIZE=480`, and keep `MOTION_ENABLED=true` |
+| High CPU | Use sub-streams, lower `PROCESS_FPS` to 1–2 and `TRACK_FPS` to 4 (or 0), use `MODEL_NAME=buffalo_s`, and keep `MOTION_ENABLED=true` |
+| Video or boxes feel slow | Click a camera for the smooth full view. Use the sub-stream. Boxes: keep `TRACK_FPS` on; `MODEL_NAME=buffalo_s` makes recognition about 3× faster |
 | Dashboard shows "Disconnected" | Check that `run.bat` is still running. Then check the API key in ⚙ Settings. |
 | "Bad API key" | Re-enter the key in ⚙ Settings. It must match `API_KEY` on the backend. |
 | "No face found" when enrolling | Use a clearer, larger, front-facing photo. Faces must be at least about 40 px wide. |

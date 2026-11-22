@@ -124,7 +124,9 @@
   function pollTile(img, id) {
     if (!img.isConnected) return;
     if (focusId !== null || document.hidden) { setTimeout(() => pollTile(img, id), 1000); return; }
-    img.onload = () => setTimeout(() => pollTile(img, id), 450);
+    // Refresh faster when there are few cameras (each refresh is one small JPEG).
+    const gap = cameras.length <= 2 ? 80 : cameras.length <= 4 ? 150 : cameras.length <= 9 ? 300 : 500;
+    img.onload = () => setTimeout(() => pollTile(img, id), gap);
     img.onerror = () => setTimeout(() => pollTile(img, id), 3000);
     img.src = withT(url(`/api/cameras/${id}/snapshot.jpg`, true));
   }
