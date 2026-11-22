@@ -35,7 +35,7 @@
       </div>
       <div class="feed-wrap">
         <img id="feed" alt="Live camera feed" />
-        <div id="feedError" class="feed-error hidden">Cannot reach backend</div>
+        <div id="feedError" class="feed-error hidden"></div>
       </div>
       <form id="cameraForm" class="row">
         <input id="cameraSource" placeholder="Camera source: 0 for webcam, or rtsp://user:pass@ip:554/stream" />
@@ -146,6 +146,7 @@
   <dialog id="settingsDialog">
     <form method="dialog" id="settingsForm">
       <h3>Backend connection</h3>
+      <p class="small muted">The backend is the SafeFace program running on your PC (<code>run.bat</code>). If you opened this page at <code>http://localhost:8000</code>, leave the URL empty. On the website, enter the backend's public address, for example your Cloudflare Tunnel URL.</p>
       <label>Backend URL <small class="muted">(empty = same server as this page)</small>
         <input id="apiBaseInput" placeholder="https://your-backend.example.com" />
       </label>

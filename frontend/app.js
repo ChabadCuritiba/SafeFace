@@ -78,12 +78,34 @@
 
   // ------------------------------------------------------------------ live feed
   const feed = $("#feed");
+  // Hosted on Firebase with no backend address set: the backend can't be on this server.
+  const needsBackendUrl = () => !cfg.apiBase && /\.(web\.app|firebaseapp\.com)$/.test(location.hostname);
+
+  function showFeedError() {
+    const box = $("#feedError");
+    const target = cfg.apiBase || location.origin;
+    const btn = el("button", { type: "button", className: "btn", textContent: "⚙ Open settings" });
+    btn.addEventListener("click", openSettings);
+    const lines = needsBackendUrl()
+      ? ["Not connected to your SafeFace backend yet.",
+         "This website is only the dashboard. Click ⚙ Settings and enter your backend's address (for example your Cloudflare Tunnel URL) and API key."]
+      : [`Cannot reach the SafeFace backend at ${target}`,
+         target.includes("localhost") || target.includes("127.0.0.1")
+           ? "Make sure run.bat is running and its window shows “SafeFace ready.”"
+           : "Make sure run.bat and your tunnel are both running on the PC, and that the address in ⚙ Settings is correct."];
+    box.replaceChildren(el("div", { className: "feed-error-inner" },
+      el("strong", { textContent: lines[0] }), el("p", { textContent: lines[1] }), btn));
+    box.classList.remove("hidden");
+    feed.style.visibility = "hidden";
+  }
   function startFeed() {
-    $("#feedError").classList.add("hidden");
+    if (needsBackendUrl()) { feed.removeAttribute("src"); showFeedError(); return; }
     feed.src = url("/api/stream", true) + (cfg.apiKey ? "&" : "?") + "t=" + Date.now();
   }
+  feed.addEventListener("load", () => { $("#feedError").classList.add("hidden"); feed.style.visibility = ""; });
   feed.addEventListener("error", () => {
-    $("#feedError").classList.remove("hidden");
+    if (!feed.getAttribute("src")) return;
+    showFeedError();
     setTimeout(startFeed, 3000);
   });
 
@@ -445,6 +467,12 @@
   // ------------------------------------------------------------------ boot
   async function boot() {
     startFeed();
+    if (needsBackendUrl()) {
+      const pill = $("#statusPill");
+      pill.className = "pill pill-warn"; pill.textContent = "Backend not set";
+      setTimeout(() => { if (needsBackendUrl()) openSettings(); }, 3600);  // after the opening animation
+      return;
+    }
     connectWs();
     const events = await loadHistory();
     $("#alerts").replaceChildren();
