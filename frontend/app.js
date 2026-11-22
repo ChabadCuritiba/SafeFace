@@ -320,5 +320,21 @@
     document.removeEventListener("click", askNotify);
   });
 
+  // ------------------------------------------------------------------ opening animation
+  (function splash() {
+    const sp = document.getElementById("splash");
+    if (!sp) return;
+    const img = sp.querySelector("img");
+    let done = false;
+    const remove = () => { if (!done) { done = true; sp.remove(); } };
+    const play = () => sp.classList.add("play");
+    // Wait for the logo so the animation never plays on an empty box.
+    if (img.complete && img.naturalWidth) play();
+    else { img.addEventListener("load", play, { once: true }); img.addEventListener("error", remove, { once: true }); }
+    sp.addEventListener("animationend", (e) => { if (e.target === sp) remove(); });
+    sp.addEventListener("click", remove);           // click to skip
+    setTimeout(remove, 6000);                        // safety net
+  })();
+
   boot();
 })();
