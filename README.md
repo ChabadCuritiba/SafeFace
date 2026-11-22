@@ -187,8 +187,7 @@ The dashboard connects straight to the backend URL over HTTPS and WSS. A Hosting
 ```bash
 npm install -g firebase-tools
 firebase login
-cp .firebaserc.example .firebaserc       # then put your Firebase project ID in it
-#   or: firebase use --add
+# .firebaserc already points at the project: safeface-3bc6e
 ```
 
 Edit `frontend/config.js` and set `apiBase` to your backend's public HTTPS URL, which you get in Step 2:
