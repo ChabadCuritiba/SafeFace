@@ -1,13 +1,139 @@
-# SafeFace: real-time face recognition for security cameras
+# SafeFace: face recognition for security cameras
 
-SafeFace watches a USB webcam or an RTSP IP camera and recognises enrolled people. Each time it sees someone it knows, it logs the event (name, time, confidence and a cropped snapshot) and pushes a live alert to a web dashboard.
+SafeFace recognises enrolled people on camera. Each time it sees someone, it logs the event (name, time, match score and a snapshot) and pushes a live alert. It comes in two forms:
+
+| | **Part A: Website** (`web/`) | **Part B: PC server** (`backend/`) |
+|---|---|---|
+| Install | Nothing. Open **https://safeface-3bc6e.web.app** | Python on a PC near the cameras |
+| Cameras | The camera of the device showing the page (laptop webcam, phone, USB webcam) | USB webcams **and RTSP IP cameras (Hikvision etc.)** |
+| Runs | While the page is open | 24/7 |
+| Data | Firebase Firestore, synced live to every signed-in device | SQLite on the PC |
+| Recognition | In the browser (face-api / TensorFlow.js) | InsightFace ArcFace (more accurate) |
+
+Browsers can't open RTSP streams and can't reach a private network, so **Hikvision cameras need Part B**.
+
+---
+
+# Part A: Website (no install)
+
+## A1. How it works
+
+```
+ Browser (any phone / laptop)                                   Firebase (safeface-3bc6e)
+ ┌───────────────────────────────────────────────────┐          ┌─────────────────────────────┐
+ │ camera ─► motion gate ─► face-api detect +        │          │ Hosting: the site + models  │
+ │           describe (128-d) ─► match vs. enrolled  │          │ Auth: Google sign-in        │
+ │           faces ─► event + snapshot ──────────────┼─────────►│ Firestore: people, faces,   │
+ │ live alerts / history / people ◄──────────────────┼──────────┤ events (live listeners)     │
+ └───────────────────────────────────────────────────┘          └─────────────────────────────┘
+```
+
+- **Video never leaves the device.** Only enrolled face descriptors, small face thumbnails and detection events are stored in Firestore.
+- **Everything is self-hosted on Firebase Hosting:** the AI models (about 12 MB, cached after the first visit), face-api and the Firebase SDK. No other CDNs are used.
+- **Every signed-in device sees alerts live.** For example, a tablet at the door runs the camera while your phone gets the alerts.
+- **Only approved Google accounts can see or change anything.** This is enforced by `firestore.rules`, not just hidden in the page.
+- If the site is opened somewhere Firebase isn't configured, such as a local test server, it still works and saves data **on that device only**. A *This device only* badge shows when that's the case.
+
+## A2. One-time Firebase setup (about 5 minutes)
+
+In the [Firebase console](https://console.firebase.google.com/) open project **safeface-3bc6e**:
+
+1. **Register a web app:** *Project settings* (gear icon) → *Your apps* → **Add app → Web** (`</>`). Give it any nickname and click Register. You can skip the code it shows; the site configures itself.
+2. **Turn on Google sign-in:** *Build → Authentication → Get started → Sign-in method → Google → Enable*, choose a support email, and Save.
+3. **Create the database:** *Build → Firestore Database → Create database*. Choose a location close to you (e.g. `southamerica-east1` for São Paulo) and start in **production mode**.
+4. **Choose who may sign in:** edit `firestore.rules`. By default, any Google account on **@chabadcuritiba.com** is allowed. Add other addresses (e.g. Gmail) to `allowedEmails()`:
+   ```
+   function allowedEmails() {
+     return ['someone@gmail.com', 'other@gmail.com'];
+   }
+   ```
+
+## A3. Deploy
+
+On a PC with [Node.js LTS](https://nodejs.org) and [Git](https://git-scm.com/download/win):
+
+```
+git clone -b claude/face-recognition-security-camera-5bpwi4 https://github.com/ChabadCuritiba/SafeFace.git
+cd SafeFace
+npm install -g firebase-tools
+firebase login
+firebase deploy --only hosting,firestore
+```
+
+`.firebaserc` already points at `safeface-3bc6e`. The deploy uploads the site **and** the security rules.
+
+To update later:
+
+```
+git pull
+firebase deploy --only hosting,firestore
+```
+
+## A4. Use it
+
+1. Open **https://safeface-3bc6e.web.app** and **sign in with Google**.
+2. Click **▶ Start camera** and allow camera access. Pick a different camera from the dropdown if you have several; on phones the back camera is used by default.
+3. **People database** tab. Add faces in any of these ways:
+   - **Add faces from a photo:** works with group photos. Every face is boxed and numbered; type names and click *Add selected faces*.
+   - **Add from the live camera:** type a name, face the camera and capture 2–3 times.
+   - **+ Add face** on any detection in the history.
+4. When an enrolled person passes, you get a green box with their name, a sound and pop-up, and a history entry. **Every signed-in device** gets the alert.
+5. **⚙ Settings** (saved per device):
+   - match strictness;
+   - checks per second;
+   - seconds before logging the same person again;
+   - only scan on motion;
+   - log unknown faces;
+   - camera name shown in history (e.g. "Front door").
+
+Next time the page is opened on the same device, the camera starts automatically.
+
+**Tips**
+- Keep the tab open and visible. Browsers slow down background tabs. The page keeps the screen awake while the camera is on.
+- For a fixed "door camera", use an old phone or tablet on a stand, plugged into power, with the page open.
+- Faster devices check more often: a laptop easily does 3–5 checks per second, an older phone 1–2.
+
+## A5. Test the website locally
+
+The site is plain static files, so you can open it with any local web server. No Firebase is needed; data is kept on that device:
+
+```
+cd web
+python -m http.server 8000
+```
+
+Then open http://localhost:8000. Cameras only work on `localhost` or `https://`.
+
+To test against Firebase's local emulators (sign-in, Firestore and rules):
+
+```
+firebase emulators:start --only hosting,firestore,auth --project demo-safeface
+```
+
+Then open http://127.0.0.1:5000/?emulators=1
+
+## A6. Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| "Google sign-in isn't enabled" | Step A2.2 |
+| "Access denied … isn't allowed" | Add the email to `firestore.rules` (A2.4), then run `firebase deploy --only firestore` |
+| "Couldn't load data from Firebase" | Create the Firestore database (A2.3), then deploy the rules |
+| *This device only* badge on safeface-3bc6e.web.app | Register a web app (A2.1) and reload |
+| "Camera permission was blocked" | Click the camera icon in the address bar → Allow, then Start |
+| Very slow ("graphics acceleration unavailable") | Turn on hardware acceleration in the browser settings, or use a newer device |
+| Photo won't open (iPhone) | HEIC isn't supported by most browsers. Share the photo as JPG, or set *Settings → Camera → Formats → Most Compatible* |
+
+---
+
+# Part B: PC server (for Hikvision / RTSP cameras)
+
+The Python server runs 24/7 on a PC on the same network as the cameras and serves its own dashboard at http://localhost:8000.
 
 - **Backend:** Python, FastAPI, OpenCV, InsightFace (ArcFace `buffalo_l`), ONNX Runtime
 - **Storage:** SQLite for people, embeddings and events. Face embeddings sit in an in-memory NumPy vector index.
 - **Real-time:** WebSocket for alerts and status, MJPEG for the annotated live video
-- **Frontend:** plain HTML, CSS and JS with no build step. It can be deployed to **Firebase Hosting**.
-
----
+- **Dashboard:** plain HTML, CSS and JS in `backend/dashboard/`, served by the backend
 
 ## 1. Architecture
 
@@ -35,7 +161,7 @@ SafeFace watches a USB webcam or an RTSP IP camera and recognises enrolled peopl
                       └───────────────────────────────────────────────────────────────────────────┘
                                          ▲  HTTPS / WSS  (X-API-Key)
                                          │
-                      ┌──────────── frontend (static, Firebase Hosting or served by FastAPI) ─────┐
+                      ┌──────────── dashboard (backend/dashboard, served by FastAPI) ─────────────┐
                       │  Live feed · Live alerts · Detection history · People database         │
                       └───────────────────────────────────────────────────────────────────────────┘
 ```
@@ -55,7 +181,16 @@ SafeFace watches a USB webcam or an RTSP IP camera and recognises enrolled peopl
 
 ```
 SafeFace/
-├── backend/
+├── web/                    Part A: the website (deployed to Firebase Hosting)
+│   ├── index.html  styles.css  config.js
+│   ├── js/app.js           camera, recognition loop, UI
+│   ├── js/faces.js         face-api wrapper (detect, describe, match)
+│   ├── js/store.js         Firestore + this-device-only storage
+│   ├── vendor/             face-api + Firebase SDK (self-hosted)
+│   └── models/             face detection / recognition models
+├── firestore.rules         who may sign in and read or write data
+├── firebase.json  .firebaserc
+├── backend/                Part B: PC server
 │   ├── app/
 │   │   ├── main.py         FastAPI routes, auth, MJPEG, WebSocket, static files
 │   │   ├── config.py       all settings (env vars / backend/.env)
@@ -64,14 +199,9 @@ SafeFace/
 │   │   ├── recognizer.py   InsightFace wrapper + vector index
 │   │   ├── database.py     SQLite schema and queries
 │   │   └── hub.py          thread-safe WebSocket broadcaster
-│   ├── requirements.txt
-│   ├── .env.example
-│   └── Dockerfile          for Docker / Google Cloud Run
-├── frontend/               static dashboard (deployed to Firebase Hosting)
-│   ├── index.html  styles.css  app.js
-│   └── config.js           ← backend URL for the deployed site
-├── firebase.json
-├── run.sh / run.bat        one-command local start
+│   ├── dashboard/          the server's web dashboard
+│   ├── requirements.txt  .env.example  Dockerfile
+├── run.sh / run.bat        one-command start of the PC server
 └── README.md
 ```
 
@@ -171,85 +301,48 @@ Interactive API docs are at **http://localhost:8000/docs**.
 
 ---
 
-## 5. Deploying with Firebase
+## 5. Remote access to the PC server
 
-Firebase Hosting serves **static files only**. It can't run Python, OpenCV or a model, and it can't reach a camera on your LAN. Deployment is therefore split in two:
+The PC server serves its own dashboard, so to reach it from outside the building you only need a secure public address for the PC. The website on Firebase (Part A) is separate and isn't needed for this.
 
-| Piece | Where it runs |
-|---|---|
-| Dashboard (`frontend/`) | **Firebase Hosting**: global CDN, free HTTPS, `your-project.web.app` |
-| Recognition backend (`backend/`) | **Option A:** a PC or mini-PC on the same network as the cameras *(recommended)*. **Option B:** Google Cloud Run *(only if the camera is reachable from the internet)* |
-
-The dashboard connects straight to the backend URL over HTTPS and WSS. A Hosting rewrite isn't used because Firebase Hosting rewrites don't carry WebSockets or long-lived MJPEG streams.
-
-### Step 1: deploy the dashboard to Firebase Hosting
-
-```bash
-npm install -g firebase-tools
-firebase login
-# .firebaserc already points at the project: safeface-3bc6e
-```
-
-Edit `frontend/config.js` and set `apiBase` to your backend's public HTTPS URL, which you get in Step 2:
-
-```js
-window.SAFEFACE_CONFIG = { apiBase: "https://cam.example.com" };
-```
-
-```bash
-firebase deploy --only hosting
-```
-
-You can also leave `apiBase` empty and enter the backend URL and API key in the dashboard's ⚙ **Settings** dialog. They are saved per browser.
-
-### Step 2, Option A (recommended): backend on-site, exposed with HTTPS
-
-Run the backend on a machine on the cameras' LAN. Any PC, a NUC, or a Jetson works; a Raspberry Pi 5 can handle `buffalo_s`.
-
-1. Create `backend/.env`:
+1. In `backend/.env`, set a key so strangers can't open your cameras:
    ```ini
    CAMERA_SOURCE=rtsp://user:pass@192.168.1.64:554/Streaming/Channels/102
    API_KEY=<a long random string>     # e.g. python -c "import secrets;print(secrets.token_urlsafe(32))"
-   CORS_ORIGINS=https://your-project.web.app,https://your-project.firebaseapp.com
-   SERVE_FRONTEND=false
    ```
-2. Start it with `./run.sh`, or with Docker:
+2. Start the server (`run.bat` / `./run.sh`), or use Docker:
    ```bash
    cd backend
    docker build -t safeface .
-   docker run -d --restart unless-stopped --env-file .env -p 8000:8080 -v safeface-data:/data safeface
+   docker run -d --restart unless-stopped --env-file .env -e SERVE_FRONTEND=true -e FRONTEND_DIR=/app/dashboard \
+     -v "$PWD/dashboard:/app/dashboard" -p 8000:8080 -v safeface-data:/data safeface
    ```
-   (For a USB webcam inside Docker on Linux, add `--device /dev/video0`.)
-3. Give it a public **HTTPS** URL. Browsers block an `https://` Firebase page from calling plain `http://`. The easiest route that needs no port-forwarding is **Cloudflare Tunnel**:
+3. Give the PC an HTTPS address. The easiest way, with no port-forwarding, is **Cloudflare Tunnel**:
    ```bash
    cloudflared tunnel --url http://localhost:8000          # quick test URL
-   # or a named tunnel on your own domain for production
+   # or a named tunnel on your own domain for a permanent address
    ```
-   Tailscale Funnel, ngrok, or a reverse proxy (Caddy/nginx) with a certificate also work.
-4. Put that URL in `frontend/config.js` (or the ⚙ Settings dialog), then redeploy the hosting.
+   Tailscale Funnel or a reverse proxy (Caddy/nginx) with a certificate also work.
+4. Open the tunnel address in any browser. Enter the API key in ⚙ **Settings** when asked.
 
-### Step 2, Option B: backend on Google Cloud Run
-
-This only makes sense if your camera's RTSP stream is reachable from the internet, for example through a VPN or a cloud NVR.
+**Google Cloud Run (advanced).** This only makes sense if the camera's RTSP stream is reachable from the internet (VPN or cloud NVR). It needs the Blaze plan and costs roughly US$70–100/month for an always-on instance:
 
 ```bash
 cd backend
 gcloud run deploy safeface-backend \
-  --source . --region us-central1 \
+  --source . --region southamerica-east1 \
   --cpu 2 --memory 2Gi --timeout 3600 \
   --min-instances 1 --max-instances 1 --no-cpu-throttling \
   --allow-unauthenticated \
-  --set-env-vars "CAMERA_SOURCE=rtsp://...,API_KEY=...,CORS_ORIGINS=https://your-project.web.app"
+  --set-env-vars "CAMERA_SOURCE=rtsp://...,API_KEY=..."
 ```
 
-- `--min-instances 1 --no-cpu-throttling` keeps the recognition loop running when no browser is open. Expect to pay for an always-on instance.
-- `--max-instances 1` matters: each instance runs its own camera loop and its own SQLite file.
-- Cloud Run's disk is **ephemeral**, so events and enrolled faces are lost on redeploy. Mount a Cloud Storage bucket at `/data` (`--add-volume` / `--add-volume-mount`), or prefer Option A.
+Cloud Run's disk is **ephemeral**: mount a Cloud Storage bucket at `/data`, or events and faces are lost on redeploy.
 
 ### Security checklist for an internet-exposed backend
 
 - [ ] `API_KEY` is set. Without it, **anyone with the URL can watch your camera**.
-- [ ] `CORS_ORIGINS` lists only your Firebase domains.
+- [ ] `CORS_ORIGINS` lists only the origins that need it (leave it unset if you only use the server's own dashboard).
 - [ ] The backend is served over HTTPS only.
 - [ ] `backend/data/` is backed up and **never committed**. It holds biometric data, and `.gitignore` already excludes it.
 
@@ -276,7 +369,7 @@ All settings are environment variables. You can also put them in `backend/.env`.
 | `API_KEY` | *(empty)* | Shared secret for the API, stream and WebSocket |
 | `CORS_ORIGINS` | `*` | Allowed dashboard origins |
 | `DATA_DIR` | `backend/data` | Where the SQLite DB, snapshots and reference faces live |
-| `SERVE_FRONTEND` | `true` | Serve `frontend/` at `/` (turn off when using Firebase) |
+| `SERVE_FRONTEND` | `true` | Serve the dashboard (`backend/dashboard/`) at `/` |
 | `ONNX_PROVIDERS` | `CUDAExecutionProvider,CPUExecutionProvider` | Inference backends, in order of preference |
 
 **Tuning `MATCH_THRESHOLD`**
@@ -322,7 +415,7 @@ Auth: send the header `X-API-Key: <key>` or the query parameter `?key=<key>`. Th
 | "NO SIGNAL / Cannot open …" | Wrong webcam index or RTSP URL. Test the URL in VLC. Check the camera's username and password, and that port 554 is reachable. |
 | Video lags several seconds behind | Use the camera's sub-stream. Lag shouldn't build up, because only the newest frame is kept. |
 | High CPU | Lower `PROCESS_FPS` to 1–2, use `MODEL_NAME=buffalo_s` and `DET_SIZE=480`, and keep `MOTION_ENABLED=true` |
-| Dashboard on Firebase shows "Disconnected" | Check that the backend URL is HTTPS and that `CORS_ORIGINS` includes your Firebase domain. Then check the API key in ⚙ Settings. |
+| Dashboard shows "Disconnected" | Check that `run.bat` is still running. Then check the API key in ⚙ Settings. |
 | "Bad API key" | Re-enter the key in ⚙ Settings. It must match `API_KEY` on the backend. |
 | "No face found" when enrolling | Use a clearer, larger, front-facing photo. Faces must be at least about 40 px wide. |
 | "Not a valid image" for iPhone photos | HEIC isn't supported. Export or share the photo as JPG (on iPhone: *Settings → Camera → Formats → Most Compatible*). |
@@ -338,4 +431,4 @@ Face templates are **biometric data**. Under Brazil's LGPD, as under the GDPR an
 - Restrict access to the dashboard.
 - Set a retention period and clear old events regularly.
 
-All data stays on the backend machine, in `backend/data/`. No cloud face API is used.
+Where the data lives: with the PC server, everything stays on that PC in `backend/data/`. With the website, video stays on the device, while face descriptors, small face thumbnails and detection events are stored in your own Firebase project and are readable only by the accounts allowed in `firestore.rules`. No third-party face API is used in either mode.

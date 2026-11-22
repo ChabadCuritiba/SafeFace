@@ -11,3 +11,4 @@ backend/.env
 # Firebase
 .firebase/
 firebase-debug.log*
+*-debug.log

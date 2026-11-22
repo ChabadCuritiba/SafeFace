@@ -67,7 +67,7 @@ class Settings:
     api_key: str = os.getenv("API_KEY", "")
     cors_origins: list[str] = field(default_factory=lambda: _list("CORS_ORIGINS", "*"))
     serve_frontend: bool = _bool("SERVE_FRONTEND", True)
-    frontend_dir: Path = Path(os.getenv("FRONTEND_DIR", str(BASE_DIR.parent / "frontend")))
+    frontend_dir: Path = Path(os.getenv("FRONTEND_DIR", str(BASE_DIR / "dashboard")))
 
     @property
     def db_path(self) -> Path:

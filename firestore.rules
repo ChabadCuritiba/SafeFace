@@ -1,0 +1,50 @@
+rules_version = '2';
+
+// Who may use SafeFace. Everyone else is refused, even if they sign in.
+// After editing, run:  firebase deploy --only firestore:rules
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Any Google account on this email domain...
+    function allowedDomain() {
+      return 'chabadcuritiba.com';
+    }
+
+    // 2. ...plus these individual addresses, e.g. ['someone@gmail.com', 'other@gmail.com']
+    function allowedEmails() {
+      return [];
+    }
+
+    function allowed() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && (request.auth.token.email.lower().split('@')[1] == allowedDomain()
+            || request.auth.token.email.lower() in allowedEmails());
+    }
+
+    function isDescriptor(d) {
+      return d is list && d.size() == 128;
+    }
+
+    match /people/{id} {
+      allow read, delete: if allowed();
+      allow create, update: if allowed()
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 64;
+    }
+
+    match /faces/{id} {
+      allow read, delete: if allowed();
+      allow create: if allowed()
+        && request.resource.data.personId is string
+        && isDescriptor(request.resource.data.descriptor);
+    }
+
+    match /events/{id} {
+      allow read, delete: if allowed();
+      allow create: if allowed()
+        && request.resource.data.name is string
+        && request.resource.data.timestamp is number;
+    }
+  }
+}
